@@ -1,0 +1,106 @@
+# =========================
+# ENV / SECRETS
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# STORAGE (PERSISTENT DATA)
+# =========================
+storage/qdrant/*
+storage/open-webui/*
+storage/ollama/*
+
+# keep folders
+!storage/qdrant/.gitkeep
+!storage/open-webui/.gitkeep
+!storage/ollama/.gitkeep
+
+# =========================
+# USER DOCUMENTS (CONTEXT)
+# =========================
+docs/input/*
+docs/templates/*
+docs/glossary/*
+docs/examples/*
+
+# allow placeholders
+!docs/input/.gitkeep
+!docs/templates/.gitkeep
+!docs/glossary/.gitkeep
+!docs/examples/.gitkeep
+
+# =========================
+# PYTHON (rag-service)
+# =========================
+pycache/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.tmp
+*.log
+
+.venv/
+venv/
+env/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# DOCKER
+# =========================
+*.pid
+*.sock
+
+# =========================
+# OS FILES
+# =========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# LOGS
+# =========================
+logs/
+*.log
+
+# =========================
+# TEMP FILES
+# =========================
+tmp/
+temp/
+
+# =========================
+# NODE (если вдруг добавится фронт)
+# =========================
+node_modules/
+
+# =========================
+# BUILD ARTIFACTS
+# =========================
+dist/
+build/
+
+# =========================
+# DOCKER LOCAL OVERRIDES
+# =========================
+compose.override.yml
+docker-compose.override.yml
+
+# =========================
+# CONTINUE LOCAL CONFIG
+# =========================
+continue/config.yaml
