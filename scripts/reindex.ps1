@@ -1,0 +1,1 @@
+Invoke-RestMethod -Method POST -Uri "http://localhost:8000/reindex"

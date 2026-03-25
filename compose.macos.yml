@@ -1,0 +1,16 @@
+services:
+  ollama:
+    ports: []
+    volumes: []
+    profiles: ["manual-only"]
+
+  open-webui:
+    depends_on: []
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+
+  rag-service:
+    depends_on:
+      - qdrant
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
