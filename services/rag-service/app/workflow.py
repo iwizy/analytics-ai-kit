@@ -1,0 +1,988 @@
+"""
+Task-to-draft workflow with section routing, context packs, gap analysis, and refine.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from app.chunking import chunk_text
+from app.documents import collect_supported_files, extract_text
+from app.llm import generate_text, load_text_file, render_template
+from app.search import search_documents
+from app.settings import (
+    ARTIFACTS_ROOT,
+    CONTEXT_PACK_LIMIT,
+    DOCS_ROOT,
+    DRAFT_MODEL,
+    FT_SECTIONS,
+    GLOBAL_CONTEXT_CATEGORIES,
+    NFT_SECTIONS,
+    REFINE_MODEL,
+    REVIEW_MODEL,
+    SECTION_DISPLAY_NAMES,
+    TASKS_ROOT,
+)
+
+
+class WorkflowError(ValueError):
+    """
+    Raised when workflow input is invalid or required files are missing.
+    """
+
+
+@dataclass(frozen=True)
+class RoutingRule:
+    """
+    Routing settings for section-level context retrieval.
+    """
+
+    global_categories: tuple[str, ...]
+    query_hint: str
+    path_keywords: tuple[str, ...]
+
+
+@dataclass
+class ScoredSnippet:
+    """
+    Context snippet with ranking score and source metadata.
+    """
+
+    source_level: str
+    source_path: str
+    category: str
+    score: float
+    text: str
+
+
+SECTION_ROUTING: dict[str, RoutingRule] = {
+    "business_requirements": RoutingRule(
+        global_categories=("input", "examples"),
+        query_hint="бизнес требования процесс сценарий пользователь ценность",
+        path_keywords=("business", "product", "requirement", "feature", "use", "пример", "процесс"),
+    ),
+    "internal_integrations": RoutingRule(
+        global_categories=("input", "glossary", "examples"),
+        query_hint="внутренние интеграции системы api сервис контракт данные",
+        path_keywords=("integration", "internal", "system", "api", "service", "интеграц", "система"),
+    ),
+    "external_integrations": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="внешние интеграции провайдер партнер api webhook обмен",
+        path_keywords=("external", "partner", "vendor", "gateway", "api", "интеграц", "внеш"),
+    ),
+    "validations": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="валидация проверка правило формат обязательность ошибка",
+        path_keywords=("validation", "rule", "check", "schema", "валид", "правил"),
+    ),
+    "errors": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="ошибка исключение сбой retry отказ",
+        path_keywords=("error", "exception", "fail", "retry", "ошиб", "сбой"),
+    ),
+    "open_questions": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="неопределенность допущение риск вопрос",
+        path_keywords=("risk", "assumption", "unknown", "gap", "вопрос", "риск"),
+    ),
+    "performance": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="производительность latency throughput нагрузка rps",
+        path_keywords=("performance", "latency", "load", "capacity", "производ", "нагруз"),
+    ),
+    "availability": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="доступность sla slo failover отказоустойчивость",
+        path_keywords=("availability", "sla", "slo", "uptime", "failover", "доступ"),
+    ),
+    "security": RoutingRule(
+        global_categories=("input", "glossary", "examples"),
+        query_hint="безопасность доступ роли секреты pii комплаенс",
+        path_keywords=("security", "auth", "permission", "secret", "pii", "безопас", "доступ"),
+    ),
+    "logging": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="логирование события журнал trace correlation",
+        path_keywords=("logging", "log", "trace", "observability", "лог", "трасс"),
+    ),
+    "audit": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="аудит действия изменения расследование",
+        path_keywords=("audit", "history", "investigation", "аудит", "расслед"),
+    ),
+    "retention": RoutingRule(
+        global_categories=("input", "glossary", "examples"),
+        query_hint="retention хранение архивирование удаление срок",
+        path_keywords=("retention", "archive", "delete", "storage", "хранен", "архив"),
+    ),
+    "constraints": RoutingRule(
+        global_categories=("input", "examples", "glossary"),
+        query_hint="ограничения допущения зависимости риск",
+        path_keywords=("constraint", "limitation", "dependency", "огранич", "зависим"),
+    ),
+}
+
+TASK_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
+TOKEN_PATTERN = re.compile(r"[a-zA-Zа-яА-Я0-9_]{3,}")
+
+FT_HINTS = (
+    "бизнес",
+    "функц",
+    "сценар",
+    "пользоват",
+    "валидац",
+    "интеграц",
+    "процесс",
+)
+
+NFT_HINTS = (
+    "производ",
+    "доступност",
+    "безопас",
+    "лог",
+    "аудит",
+    "retention",
+    "sla",
+    "slo",
+    "latency",
+    "throughput",
+)
+
+
+def utc_timestamp() -> str:
+    """
+    Build a filesystem-safe UTC timestamp.
+    """
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def utc_iso() -> str:
+    """
+    Build ISO UTC timestamp for response payloads.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
+def sanitize_task_id(task_id: str) -> str:
+    """
+    Validate task id and strip spaces.
+    """
+    normalized = task_id.strip()
+    if not normalized:
+        raise WorkflowError("`task_id` не должен быть пустым")
+
+    if not TASK_ID_PATTERN.match(normalized):
+        raise WorkflowError(
+            "`task_id` содержит недопустимые символы; используйте буквы, цифры, точку, underscore и дефис"
+        )
+
+    return normalized
+
+
+def resolve_task_paths(task_id: str) -> tuple[Path, Path, Path]:
+    """
+    Resolve task directory, task.md and attachments folder.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    task_dir = TASKS_ROOT / "inbox" / safe_task_id
+    task_path = task_dir / "task.md"
+    attachments_dir = task_dir / "attachments"
+
+    if not task_path.exists():
+        raise WorkflowError(f"Файл task.md не найден для task_id='{safe_task_id}'")
+
+    return task_dir, task_path, attachments_dir
+
+
+def tokenize(text: str) -> set[str]:
+    """
+    Tokenize text for lightweight lexical ranking.
+    """
+    return {token.lower() for token in TOKEN_PATTERN.findall(text.lower())}
+
+
+def lexical_score(chunk: str, query_tokens: set[str], extra_tokens: set[str]) -> float:
+    """
+    Score a chunk by overlap with query and section-specific tokens.
+    """
+    chunk_tokens = tokenize(chunk)
+    if not chunk_tokens:
+        return 0.0
+
+    query_overlap = len(chunk_tokens & query_tokens)
+    extra_overlap = len(chunk_tokens & extra_tokens)
+    return (query_overlap * 2.0) + (extra_overlap * 1.0)
+
+
+def to_relative_label(path: Path, root: Path) -> str:
+    """
+    Convert path to human-readable relative label.
+    """
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def file_text_chunks(path: Path) -> list[str]:
+    """
+    Load a document and split it into chunks.
+    """
+    text = extract_text(path)
+    if not text.strip():
+        return []
+
+    return chunk_text(text)
+
+
+def detect_document_type(task_text: str) -> tuple[str, dict[str, Any]]:
+    """
+    Detect document type from task text using heuristic keyword scoring.
+    """
+    lowered = task_text.lower()
+
+    ft_hits = [hint for hint in FT_HINTS if hint in lowered]
+    nft_hits = [hint for hint in NFT_HINTS if hint in lowered]
+
+    ft_score = len(ft_hits)
+    nft_score = len(nft_hits)
+
+    if nft_score > ft_score:
+        return "nft", {
+            "ft_score": ft_score,
+            "nft_score": nft_score,
+            "matched_ft_hints": ft_hits,
+            "matched_nft_hints": nft_hits,
+        }
+
+    return "ft", {
+        "ft_score": ft_score,
+        "nft_score": nft_score,
+        "matched_ft_hints": ft_hits,
+        "matched_nft_hints": nft_hits,
+    }
+
+
+def build_task_summary(task_text: str) -> str:
+    """
+    Build short task summary from first non-empty lines.
+    """
+    clean_lines = [line.strip() for line in task_text.splitlines() if line.strip()]
+    if not clean_lines:
+        return ""
+
+    summary = " ".join(clean_lines[:4])
+    return summary[:500]
+
+
+def analyze_task(task_id: str) -> dict[str, Any]:
+    """
+    Analyze task.md and return document type, sections and metadata.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    task_dir, task_path, attachments_dir = resolve_task_paths(safe_task_id)
+
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+    if not task_text.strip():
+        raise WorkflowError("Файл task.md пустой")
+
+    attachment_files = collect_supported_files(attachments_dir)
+
+    document_type, detection_meta = detect_document_type(task_text)
+    sections = FT_SECTIONS if document_type == "ft" else NFT_SECTIONS
+
+    return {
+        "task_id": safe_task_id,
+        "task_dir": str(task_dir),
+        "task_path": str(task_path),
+        "attachments_dir": str(attachments_dir),
+        "attachments": [to_relative_label(path, TASKS_ROOT) for path in attachment_files],
+        "attachments_count": len(attachment_files),
+        "task_summary": build_task_summary(task_text),
+        "document_type": document_type,
+        "sections": sections,
+        "section_display_names": {
+            section: SECTION_DISPLAY_NAMES.get(section, section) for section in sections
+        },
+        "detection": detection_meta,
+    }
+
+
+def default_routing_rule(section: str) -> RoutingRule:
+    """
+    Provide fallback routing rule for unknown section names.
+    """
+    return RoutingRule(
+        global_categories=GLOBAL_CONTEXT_CATEGORIES,
+        query_hint=section,
+        path_keywords=(),
+    )
+
+
+def choose_rule(section: str) -> RoutingRule:
+    """
+    Get a routing rule for a section.
+    """
+    return SECTION_ROUTING.get(section, default_routing_rule(section))
+
+
+def collect_task_snippets(
+    *,
+    task_path: Path,
+    attachments_dir: Path,
+    query_text: str,
+    section: str,
+) -> list[ScoredSnippet]:
+    """
+    Collect and rank snippets from task.md and task attachments.
+    """
+    query_tokens = tokenize(query_text)
+    section_tokens = tokenize(section)
+    snippets: list[ScoredSnippet] = []
+
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+    for chunk in chunk_text(task_text):
+        score = lexical_score(chunk, query_tokens, section_tokens) + 3.0
+        snippets.append(
+            ScoredSnippet(
+                source_level="task",
+                source_path=to_relative_label(task_path, TASKS_ROOT),
+                category="task",
+                score=score,
+                text=chunk,
+            )
+        )
+
+    for file_path in collect_supported_files(attachments_dir):
+        rel_path = to_relative_label(file_path, TASKS_ROOT)
+        file_path_lower = rel_path.lower()
+        path_boost = 1.5 if any(token in file_path_lower for token in section_tokens) else 0.0
+
+        for chunk in file_text_chunks(file_path):
+            score = lexical_score(chunk, query_tokens, section_tokens) + 2.0 + path_boost
+            snippets.append(
+                ScoredSnippet(
+                    source_level="attachment",
+                    source_path=rel_path,
+                    category="attachment",
+                    score=score,
+                    text=chunk,
+                )
+            )
+
+    snippets.sort(key=lambda item: item.score, reverse=True)
+    return snippets
+
+
+def collect_global_snippets_from_qdrant(
+    *,
+    query_text: str,
+    rule: RoutingRule,
+    limit: int,
+) -> list[ScoredSnippet]:
+    """
+    Pull semantic snippets from indexed global docs in Qdrant.
+    """
+    snippets: list[ScoredSnippet] = []
+
+    try:
+        hits = search_documents(query=query_text, limit=max(limit * 4, 12))
+    except Exception:
+        return []
+
+    for hit in hits:
+        category = str(hit.get("category") or "")
+        source_path = str(hit.get("source_path") or "")
+        text = str(hit.get("text") or "").strip()
+
+        if category not in rule.global_categories:
+            continue
+
+        if not text:
+            continue
+
+        source_path_lower = source_path.lower()
+        path_boost = 0.35 if any(keyword in source_path_lower for keyword in rule.path_keywords) else 0.0
+
+        snippets.append(
+            ScoredSnippet(
+                source_level="global_index",
+                source_path=source_path,
+                category=category,
+                score=float(hit.get("score") or 0.0) + path_boost,
+                text=text,
+            )
+        )
+
+    snippets.sort(key=lambda item: item.score, reverse=True)
+    return snippets[:limit]
+
+
+def collect_global_snippets_from_files(
+    *,
+    query_text: str,
+    rule: RoutingRule,
+    limit: int,
+) -> list[ScoredSnippet]:
+    """
+    Fallback lexical retrieval directly from global docs files.
+    """
+    query_tokens = tokenize(query_text)
+    section_tokens = tokenize(rule.query_hint)
+    snippets: list[ScoredSnippet] = []
+
+    for category in rule.global_categories:
+        category_dir = DOCS_ROOT / category
+        for file_path in collect_supported_files(category_dir):
+            rel_path = to_relative_label(file_path, DOCS_ROOT)
+            rel_path_lower = rel_path.lower()
+            path_boost = 2.0 if any(keyword in rel_path_lower for keyword in rule.path_keywords) else 0.0
+
+            for chunk in file_text_chunks(file_path):
+                score = lexical_score(chunk, query_tokens, section_tokens) + path_boost
+                if score <= 0:
+                    continue
+
+                snippets.append(
+                    ScoredSnippet(
+                        source_level="global_files",
+                        source_path=rel_path,
+                        category=category,
+                        score=score,
+                        text=chunk,
+                    )
+                )
+
+    snippets.sort(key=lambda item: item.score, reverse=True)
+    return snippets[:limit]
+
+
+def deduplicate_snippets(snippets: list[ScoredSnippet], limit: int) -> list[ScoredSnippet]:
+    """
+    Deduplicate snippets by source+text and keep best-ranked items.
+    """
+    deduped: list[ScoredSnippet] = []
+    seen: set[str] = set()
+
+    for snippet in snippets:
+        key = f"{snippet.source_path}::{snippet.text[:200]}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(snippet)
+        if len(deduped) >= limit:
+            break
+
+    return deduped
+
+
+def format_context_block(snippets: list[ScoredSnippet]) -> str:
+    """
+    Convert snippets into LLM-friendly context text block.
+    """
+    lines: list[str] = []
+
+    for index, snippet in enumerate(snippets, start=1):
+        preview = snippet.text.strip()
+        if len(preview) > 1500:
+            preview = f"{preview[:1500]}..."
+
+        lines.append(
+            (
+                f"[{index}] source_level={snippet.source_level}; "
+                f"category={snippet.category}; source={snippet.source_path}\n{preview}"
+            )
+        )
+
+    return "\n\n".join(lines)
+
+
+def ensure_artifacts_dir(kind: str, task_id: str) -> Path:
+    """
+    Ensure per-task artifacts folder exists.
+    """
+    path = ARTIFACTS_ROOT / kind / task_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    """
+    Write JSON payload with UTF-8 and stable formatting.
+    """
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def build_context_pack(
+    *,
+    task_id: str,
+    section: str,
+    limit: int | None = None,
+    analysis: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Build section-level context pack from global docs and task attachments.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    resolved_analysis = analysis or analyze_task(safe_task_id)
+
+    task_dir, task_path, attachments_dir = resolve_task_paths(safe_task_id)
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+
+    context_limit = limit or CONTEXT_PACK_LIMIT
+    rule = choose_rule(section)
+
+    query_text = "\n".join(
+        [
+            section,
+            rule.query_hint,
+            resolved_analysis.get("task_summary") or "",
+            task_text[:2000],
+        ]
+    )
+
+    task_snippets = collect_task_snippets(
+        task_path=task_path,
+        attachments_dir=attachments_dir,
+        query_text=query_text,
+        section=section,
+    )
+
+    global_quota = max(2, context_limit // 2)
+    task_quota = max(2, context_limit - global_quota)
+
+    global_index_snippets = collect_global_snippets_from_qdrant(
+        query_text=query_text,
+        rule=rule,
+        limit=global_quota,
+    )
+
+    remaining_global = max(0, global_quota - len(global_index_snippets))
+    global_file_snippets: list[ScoredSnippet] = []
+    if remaining_global > 0:
+        global_file_snippets = collect_global_snippets_from_files(
+            query_text=query_text,
+            rule=rule,
+            limit=remaining_global * 2,
+        )
+
+    selected: list[ScoredSnippet] = []
+    selected.extend(task_snippets[:task_quota])
+    selected.extend(global_index_snippets[:global_quota])
+    selected.extend(global_file_snippets[:remaining_global])
+
+    if len(selected) < context_limit:
+        spillover = (
+            task_snippets[task_quota:]
+            + global_index_snippets[global_quota:]
+            + global_file_snippets[remaining_global:]
+        )
+        selected.extend(spillover)
+
+    selected.sort(key=lambda item: item.score, reverse=True)
+    selected = deduplicate_snippets(selected, context_limit)
+
+    context_pack = {
+        "task_id": safe_task_id,
+        "section": section,
+        "document_type": resolved_analysis["document_type"],
+        "created_at": utc_iso(),
+        "routing": {
+            "global_categories": list(rule.global_categories),
+            "query_hint": rule.query_hint,
+            "path_keywords": list(rule.path_keywords),
+        },
+        "sources": [
+            {
+                "source_level": snippet.source_level,
+                "source_path": snippet.source_path,
+                "category": snippet.category,
+                "score": round(snippet.score, 4),
+                "text": snippet.text,
+            }
+            for snippet in selected
+        ],
+        "debug": {
+            "task_dir": str(task_dir),
+            "docs_root": str(DOCS_ROOT),
+        },
+    }
+
+    context_dir = ensure_artifacts_dir("context_packs", safe_task_id)
+    context_path = context_dir / f"{utc_timestamp()}_{section}.json"
+    write_json(context_path, context_pack)
+
+    context_pack["context_pack_path"] = str(context_path)
+    return context_pack
+
+
+def load_section_template(document_type: str, section: str) -> str:
+    """
+    Load section template from docs/templates/sections.
+    """
+    path = DOCS_ROOT / "templates" / "sections" / document_type / f"{section}.md"
+    if not path.exists():
+        raise WorkflowError(f"Шаблон секции не найден: {path}")
+    return load_text_file(path)
+
+
+def render_draft_prompt(
+    *,
+    document_type: str,
+    section: str,
+    section_template: str,
+    task_text: str,
+    context_block: str,
+) -> str:
+    """
+    Render draft prompt for FT or NFT section generation.
+    """
+    prompt_name = "draft_ft.md" if document_type == "ft" else "draft_nft.md"
+    prompt_path = DOCS_ROOT / "templates" / "prompts" / prompt_name
+    prompt_template = load_text_file(prompt_path)
+
+    return render_template(
+        prompt_template,
+        {
+            "section_name": section,
+            "section_template": section_template,
+            "task_text": task_text,
+            "context_block": context_block,
+        },
+    )
+
+
+def assemble_document(
+    *,
+    title: str,
+    task_id: str,
+    document_type: str,
+    sections: list[str],
+    bodies: dict[str, str],
+) -> str:
+    """
+    Assemble final markdown document from generated sections.
+    """
+    lines: list[str] = [
+        title,
+        "",
+        f"_task_id: {task_id}_",
+        f"_document_type: {document_type}_",
+        f"_generated_at: {utc_iso()}_",
+        "",
+    ]
+
+    for section in sections:
+        lines.append(f"## {section}")
+        lines.append(bodies.get(section, ""))
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def validate_sections(document_type: str, sections: list[str] | None) -> list[str]:
+    """
+    Validate requested sections against document type defaults.
+    """
+    allowed = FT_SECTIONS if document_type == "ft" else NFT_SECTIONS
+
+    if not sections:
+        return list(allowed)
+
+    unsupported = [section for section in sections if section not in allowed]
+    if unsupported:
+        raise WorkflowError(f"Для типа {document_type} не поддерживаются секции: {', '.join(unsupported)}")
+
+    return sections
+
+
+def create_draft(
+    *,
+    task_id: str,
+    force_document_type: str | None = None,
+    sections: list[str] | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Generate a section-based draft document for the task.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    analysis = analyze_task(safe_task_id)
+
+    if force_document_type and force_document_type not in {"ft", "nft"}:
+        raise WorkflowError("`force_document_type` должен быть `ft` или `nft`")
+
+    document_type = force_document_type or analysis["document_type"]
+    target_sections = validate_sections(document_type, sections)
+
+    _, task_path, _ = resolve_task_paths(safe_task_id)
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+
+    generation_model = model or DRAFT_MODEL
+    section_bodies: dict[str, str] = {}
+    context_pack_paths: dict[str, str] = {}
+
+    for section in target_sections:
+        context_pack = build_context_pack(
+            task_id=safe_task_id,
+            section=section,
+            analysis=analysis,
+        )
+        context_pack_paths[section] = context_pack["context_pack_path"]
+
+        context_snippets = [
+            ScoredSnippet(
+                source_level=item["source_level"],
+                source_path=item["source_path"],
+                category=item["category"],
+                score=float(item["score"]),
+                text=item["text"],
+            )
+            for item in context_pack["sources"]
+        ]
+
+        prompt = render_draft_prompt(
+            document_type=document_type,
+            section=section,
+            section_template=load_section_template(document_type, section),
+            task_text=task_text,
+            context_block=format_context_block(context_snippets),
+        )
+
+        generated = generate_text(
+            model=generation_model,
+            prompt=prompt,
+            system_prompt=(
+                "Ты senior системный аналитик. Пиши на русском языке, "
+                "строго по входному контексту, без вымышленных фактов."
+            ),
+            temperature=0.1,
+        )
+        section_bodies[section] = generated.strip()
+
+    title = "# Черновик аналитического документа"
+    draft_markdown = assemble_document(
+        title=title,
+        task_id=safe_task_id,
+        document_type=document_type,
+        sections=target_sections,
+        bodies=section_bodies,
+    )
+
+    drafts_dir = ensure_artifacts_dir("drafts", safe_task_id)
+    draft_path = drafts_dir / f"{utc_timestamp()}_draft_{document_type}.md"
+    draft_path.write_text(draft_markdown, encoding="utf-8")
+
+    return {
+        "task_id": safe_task_id,
+        "document_type": document_type,
+        "model": generation_model,
+        "sections": target_sections,
+        "draft_path": str(draft_path),
+        "context_pack_paths": context_pack_paths,
+        "analysis": analysis,
+    }
+
+
+def resolve_existing_draft(task_id: str, draft_path: str | None) -> Path:
+    """
+    Resolve draft path or discover latest draft for task.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+
+    if draft_path:
+        candidate = Path(draft_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = ARTIFACTS_ROOT / "drafts" / safe_task_id / candidate
+
+        if not candidate.exists():
+            raise WorkflowError(f"Черновик не найден: {candidate}")
+
+        return candidate
+
+    draft_dir = ARTIFACTS_ROOT / "drafts" / safe_task_id
+    candidates = sorted(draft_dir.glob("*.md"), key=lambda path: path.stat().st_mtime)
+    if not candidates:
+        raise WorkflowError(f"Для task_id='{safe_task_id}' не найдено черновиков")
+
+    return candidates[-1]
+
+
+def run_gap_analysis(
+    *,
+    task_id: str,
+    draft_path: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Run gap analysis for a draft and save result into reviews artifacts.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    _, task_path, _ = resolve_task_paths(safe_task_id)
+    resolved_draft_path = resolve_existing_draft(safe_task_id, draft_path)
+
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+    draft_text = resolved_draft_path.read_text(encoding="utf-8", errors="ignore")
+
+    prompt_template = load_text_file(DOCS_ROOT / "templates" / "prompts" / "gap_finder.md")
+    prompt = render_template(
+        prompt_template,
+        {
+            "task_text": task_text,
+            "draft_text": draft_text,
+        },
+    )
+
+    review_model = model or REVIEW_MODEL
+    gaps_markdown = generate_text(
+        model=review_model,
+        prompt=prompt,
+        system_prompt=(
+            "Ты senior системный аналитик. Проводи критичный gap-анализ "
+            "и отвечай только на русском языке."
+        ),
+        temperature=0.0,
+    )
+
+    reviews_dir = ensure_artifacts_dir("reviews", safe_task_id)
+    gaps_path = reviews_dir / f"{utc_timestamp()}_gaps.md"
+    gaps_path.write_text(gaps_markdown.strip() + "\n", encoding="utf-8")
+
+    return {
+        "task_id": safe_task_id,
+        "draft_path": str(resolved_draft_path),
+        "gaps_path": str(gaps_path),
+        "model": review_model,
+    }
+
+
+def split_markdown_sections(markdown: str) -> dict[str, str]:
+    """
+    Split markdown by second-level headings: ## section_name.
+    """
+    sections: dict[str, str] = {}
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^##\s+([a-z_]+)$", line)
+
+        if match:
+            if current_key is not None:
+                sections[current_key] = "\n".join(current_lines).strip()
+            current_key = match.group(1)
+            current_lines = []
+            continue
+
+        if current_key is not None:
+            current_lines.append(raw_line)
+
+    if current_key is not None:
+        sections[current_key] = "\n".join(current_lines).strip()
+
+    return sections
+
+
+def refine_draft(
+    *,
+    task_id: str,
+    draft_path: str | None = None,
+    instructions: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Refine existing draft section-by-section using refine prompt.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    analysis = analyze_task(safe_task_id)
+    _, task_path, _ = resolve_task_paths(safe_task_id)
+
+    resolved_draft_path = resolve_existing_draft(safe_task_id, draft_path)
+    draft_text = resolved_draft_path.read_text(encoding="utf-8", errors="ignore")
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+
+    document_type = analysis["document_type"]
+    target_sections = validate_sections(document_type, analysis["sections"])
+
+    existing_sections = split_markdown_sections(draft_text)
+    refine_prompt_template = load_text_file(DOCS_ROOT / "templates" / "prompts" / "refine.md")
+    refine_model = model or REFINE_MODEL
+    refine_notes = (instructions or "Уточни формулировки, добавь проверяемость и убери неоднозначности.").strip()
+
+    refined_bodies: dict[str, str] = {}
+    context_pack_paths: dict[str, str] = {}
+
+    for section in target_sections:
+        current_section = existing_sections.get(section, "")
+
+        context_pack = build_context_pack(
+            task_id=safe_task_id,
+            section=section,
+            analysis=analysis,
+        )
+        context_pack_paths[section] = context_pack["context_pack_path"]
+
+        context_snippets = [
+            ScoredSnippet(
+                source_level=item["source_level"],
+                source_path=item["source_path"],
+                category=item["category"],
+                score=float(item["score"]),
+                text=item["text"],
+            )
+            for item in context_pack["sources"]
+        ]
+
+        prompt = render_template(
+            refine_prompt_template,
+            {
+                "section_name": section,
+                "current_section": current_section or "Раздел пока не заполнен.",
+                "task_text": task_text,
+                "context_block": format_context_block(context_snippets),
+                "refine_instructions": refine_notes,
+            },
+        )
+
+        refined = generate_text(
+            model=refine_model,
+            prompt=prompt,
+            system_prompt=(
+                "Ты senior системный аналитик. Улучшай текст раздела строго "
+                "по контексту и отвечай только на русском языке."
+            ),
+            temperature=0.1,
+        )
+        refined_bodies[section] = refined.strip()
+
+    refined_markdown = assemble_document(
+        title="# Доработанный аналитический документ",
+        task_id=safe_task_id,
+        document_type=document_type,
+        sections=target_sections,
+        bodies=refined_bodies,
+    )
+
+    drafts_dir = ensure_artifacts_dir("drafts", safe_task_id)
+    refined_path = drafts_dir / f"{utc_timestamp()}_refined_{document_type}.md"
+    refined_path.write_text(refined_markdown, encoding="utf-8")
+
+    return {
+        "task_id": safe_task_id,
+        "document_type": document_type,
+        "refined_path": str(refined_path),
+        "source_draft_path": str(resolved_draft_path),
+        "sections": target_sections,
+        "model": refine_model,
+        "context_pack_paths": context_pack_paths,
+    }

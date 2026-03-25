@@ -14,22 +14,32 @@ storage/ollama/*
 
 # keep folders
 !storage/qdrant/.gitkeep
-!storage/open-webui/.gitkeep
 !storage/ollama/.gitkeep
 
 # =========================
 # USER DOCUMENTS (CONTEXT)
 # =========================
 docs/input/*
-docs/templates/*
 docs/glossary/*
 docs/examples/*
 
 # allow placeholders
 !docs/input/.gitkeep
-!docs/templates/.gitkeep
 !docs/glossary/.gitkeep
 !docs/examples/.gitkeep
+
+# =========================
+# TASKS / ARTIFACTS (LOCAL WORK DATA)
+# =========================
+tasks/inbox/*
+!tasks/inbox/.gitkeep
+
+artifacts/drafts/*
+artifacts/reviews/*
+artifacts/context_packs/*
+!artifacts/drafts/.gitkeep
+!artifacts/reviews/.gitkeep
+!artifacts/context_packs/.gitkeep
 
 # =========================
 # PYTHON (rag-service)

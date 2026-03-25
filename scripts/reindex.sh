@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-echo "Starting reindex..."
+echo "Запуск переиндексации..."
 curl -sS -X POST http://localhost:8000/reindex
 echo
-echo "Reindex finished."
+echo "Переиндексация завершена."

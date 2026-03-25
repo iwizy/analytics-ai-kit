@@ -2,16 +2,16 @@
 Semantic search logic for indexed project documentation.
 """
 
-import os
-
 import httpx
 from qdrant_client import QdrantClient
 
-QDRANT_URL = os.getenv("QDRANT_URL") or "http://localhost:6333"
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or "analytics_context"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "nomic-embed-text"
-SEARCH_LIMIT = int(os.getenv("SEARCH_LIMIT") or "8")
+from app.settings import (
+    EMBEDDING_MODEL,
+    OLLAMA_BASE_URL,
+    QDRANT_COLLECTION,
+    QDRANT_URL,
+    SEARCH_LIMIT,
+)
 
 
 def get_qdrant_client() -> QdrantClient:
