@@ -27,6 +27,14 @@ fi
 
 echo "Workflow endpoints доступны (HTTP ${status_code})"
 
+echo "Проверка веб-интерфейса аналитика..."
+ui_status="$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8000/ui || true)"
+if [[ "${ui_status}" != "200" ]]; then
+  echo "UI недоступен, HTTP статус: ${ui_status}"
+  exit 1
+fi
+echo "UI доступен (HTTP ${ui_status})"
+
 echo "Установленные модели Ollama:"
 ollama list || true
 

@@ -2,11 +2,19 @@
 Main application entrypoint for the local analytics RAG service.
 """
 
-from fastapi import FastAPI, HTTPException
+from __future__ import annotations
+
+import mimetypes
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.ingest import reindex_all_documents
 from app.search import search_documents
+from app.settings import ARTIFACTS_ROOT, SUPPORTED_EXTENSIONS, TASKS_ROOT
 from app.workflow import (
     WorkflowError,
     analyze_task,
@@ -14,9 +22,29 @@ from app.workflow import (
     create_draft,
     refine_draft,
     run_gap_analysis,
+    sanitize_task_id,
 )
 
-app = FastAPI(title="Analytics RAG Service", version="0.2.0")
+app = FastAPI(title="Analytics RAG Service", version="0.3.0")
+
+UI_HTML_PATH = Path(__file__).resolve().parent / "static" / "ui.html"
+ARTIFACT_KINDS = ("drafts", "reviews", "context_packs")
+PREVIEW_CHAR_LIMIT = 12000
+
+DEFAULT_TASK_TEMPLATE = """# Задача
+
+## Что нужно получить
+Коротко опишите ожидаемый результат.
+
+## Контекст
+Что уже известно и почему задача важна.
+
+## Ограничения
+Технические, регуляторные или процессные ограничения (если есть).
+
+## Критерий готовности
+Как понять, что документ можно отдавать в работу.
+"""
 
 
 class SearchRequest(BaseModel):
@@ -26,6 +54,10 @@ class SearchRequest(BaseModel):
 
 class TaskRequest(BaseModel):
     task_id: str = Field(min_length=1)
+
+
+class CreateTaskRequest(TaskRequest):
+    task_text: str = Field(min_length=1)
 
 
 class BuildContextPackRequest(TaskRequest):
@@ -48,6 +80,260 @@ class RefineRequest(TaskRequest):
     draft_path: str | None = None
     instructions: str | None = None
     model: str | None = None
+
+
+def iso_from_timestamp(timestamp: float) -> str:
+    """
+    Convert unix timestamp to ISO string.
+    """
+    return datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+
+
+def list_regular_files(directory: Path) -> list[Path]:
+    """
+    List regular files sorted by modification time descending.
+    """
+    if not directory.exists():
+        return []
+
+    files = [
+        path
+        for path in directory.iterdir()
+        if path.is_file() and path.name != ".gitkeep"
+    ]
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return files
+
+
+def serialize_file(path: Path) -> dict:
+    """
+    Serialize file metadata for API responses.
+    """
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "size_bytes": stat.st_size,
+        "modified_at": iso_from_timestamp(stat.st_mtime),
+    }
+
+
+def preview_text(path: Path, max_chars: int = PREVIEW_CHAR_LIMIT) -> str:
+    """
+    Load and truncate text preview from a file.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+    if len(text) <= max_chars:
+        return text
+
+    return f"{text[:max_chars]}\n\n...[truncated]"
+
+
+def validate_artifact_kind(kind: str) -> str:
+    """
+    Validate artifact kind.
+    """
+    if kind not in ARTIFACT_KINDS:
+        raise HTTPException(status_code=400, detail=f"Недопустимый вид артефакта: {kind}")
+    return kind
+
+
+@app.get("/ui", response_class=HTMLResponse)
+def ui_page() -> str:
+    """
+    Serve analyst web interface.
+    """
+    if not UI_HTML_PATH.exists():
+        raise HTTPException(status_code=500, detail="UI file is missing")
+
+    return UI_HTML_PATH.read_text(encoding="utf-8")
+
+
+@app.get("/ui/task-template")
+def ui_task_template() -> dict:
+    """
+    Return default task.md template.
+    """
+    template_path = TASKS_ROOT / "task.md.template"
+    if template_path.exists():
+        template_text = template_path.read_text(encoding="utf-8", errors="ignore")
+    else:
+        template_text = DEFAULT_TASK_TEMPLATE
+
+    return {
+        "status": "ok",
+        "template": template_text,
+    }
+
+
+@app.post("/ui/create-task")
+def ui_create_task(request: CreateTaskRequest) -> dict:
+    """
+    Create or update task.md file for a task.
+    """
+    safe_task_id = sanitize_task_id(request.task_id)
+    if not request.task_text.strip():
+        raise HTTPException(status_code=400, detail="Содержимое task.md не должно быть пустым")
+
+    task_dir = TASKS_ROOT / "inbox" / safe_task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    attachments_dir = task_dir / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    task_path = task_dir / "task.md"
+    task_content = request.task_text.rstrip() + "\n"
+    task_path.write_text(task_content, encoding="utf-8")
+
+    return {
+        "status": "ok",
+        "task_id": safe_task_id,
+        "task_path": str(task_path),
+        "attachments_dir": str(attachments_dir),
+    }
+
+
+@app.post("/ui/upload-attachments/{task_id}")
+async def ui_upload_attachments(task_id: str, files: list[UploadFile] = File(...)) -> dict:
+    """
+    Upload attachments for task context.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    attachments_dir = TASKS_ROOT / "inbox" / safe_task_id / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded: list[dict] = []
+    rejected: list[dict] = []
+
+    for upload in files:
+        original_name = upload.filename or ""
+        safe_name = Path(original_name).name
+
+        if not safe_name:
+            rejected.append({
+                "filename": original_name,
+                "reason": "Пустое имя файла",
+            })
+            await upload.close()
+            continue
+
+        extension = Path(safe_name).suffix.lower()
+        if extension not in SUPPORTED_EXTENSIONS:
+            rejected.append({
+                "filename": safe_name,
+                "reason": f"Неподдерживаемый формат: {extension or 'без расширения'}",
+            })
+            await upload.close()
+            continue
+
+        target_path = attachments_dir / safe_name
+        existed_before = target_path.exists()
+
+        content = await upload.read()
+        target_path.write_bytes(content)
+        await upload.close()
+
+        uploaded.append({
+            "filename": safe_name,
+            "size_bytes": len(content),
+            "overwritten": existed_before,
+        })
+
+    return {
+        "status": "ok",
+        "task_id": safe_task_id,
+        "uploaded": uploaded,
+        "rejected": rejected,
+    }
+
+
+@app.get("/ui/state/{task_id}")
+def ui_state(task_id: str) -> dict:
+    """
+    Return task state, analysis and generated artifacts.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+
+    task_dir = TASKS_ROOT / "inbox" / safe_task_id
+    task_path = task_dir / "task.md"
+    attachments_dir = task_dir / "attachments"
+
+    task_exists = task_path.exists()
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore") if task_exists else ""
+
+    attachments = [serialize_file(path) for path in list_regular_files(attachments_dir)]
+
+    analysis = None
+    analysis_error = None
+    if task_exists:
+        try:
+            analysis = analyze_task(safe_task_id)
+        except WorkflowError as exc:
+            analysis_error = str(exc)
+
+    artifacts: dict[str, list[dict]] = {}
+    for kind in ARTIFACT_KINDS:
+        kind_dir = ARTIFACTS_ROOT / kind / safe_task_id
+        artifacts[kind] = [serialize_file(path) for path in list_regular_files(kind_dir)]
+
+    latest_draft_preview = ""
+    latest_review_preview = ""
+
+    draft_files = list_regular_files(ARTIFACTS_ROOT / "drafts" / safe_task_id)
+    if draft_files:
+        latest_draft_preview = preview_text(draft_files[0])
+
+    review_files = list_regular_files(ARTIFACTS_ROOT / "reviews" / safe_task_id)
+    if review_files:
+        latest_review_preview = preview_text(review_files[0])
+
+    return {
+        "status": "ok",
+        "task_id": safe_task_id,
+        "task_exists": task_exists,
+        "task_path": str(task_path),
+        "task_text": task_text,
+        "attachments": attachments,
+        "analysis": analysis,
+        "analysis_error": analysis_error,
+        "artifacts": artifacts,
+        "latest": {
+            "draft_preview": latest_draft_preview,
+            "gaps_preview": latest_review_preview,
+        },
+    }
+
+
+@app.get("/ui/artifacts/{kind}/{task_id}/{filename}")
+def ui_artifact_file(kind: str, task_id: str, filename: str):
+    """
+    Serve artifact file from allowed storage directories.
+    """
+    safe_kind = validate_artifact_kind(kind)
+    safe_task_id = sanitize_task_id(task_id)
+
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла")
+
+    artifact_path = ARTIFACTS_ROOT / safe_kind / safe_task_id / safe_name
+    if not artifact_path.exists() or not artifact_path.is_file():
+        raise HTTPException(status_code=404, detail="Файл артефакта не найден")
+
+    media_type = mimetypes.guess_type(artifact_path.name)[0] or "application/octet-stream"
+    if artifact_path.suffix.lower() == ".md":
+        media_type = "text/markdown"
+    elif artifact_path.suffix.lower() == ".json":
+        media_type = "application/json"
+
+    return FileResponse(
+        path=str(artifact_path),
+        media_type=media_type,
+        filename=safe_name,
+    )
 
 
 @app.get("/health")

@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Analytics AI Kit - Analyst Workspace</title>
+    <style>
+      :root {
+        --paper: #f8f4ea;
+        --ink: #1e2930;
+        --ink-soft: #4a5d66;
+        --accent: #c35f2b;
+        --accent-2: #1c8a84;
+        --card: rgba(255, 255, 255, 0.78);
+        --line: rgba(28, 44, 56, 0.15);
+        --ok: #1e7a3f;
+        --warn: #9a5a16;
+        --err: #9d2424;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(1200px 600px at 10% -10%, rgba(195, 95, 43, 0.14), transparent 55%),
+          radial-gradient(900px 500px at 90% -20%, rgba(28, 138, 132, 0.16), transparent 60%),
+          linear-gradient(160deg, #f5efdf 0%, #f7f3eb 55%, #eef4f2 100%);
+        font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+        line-height: 1.45;
+      }
+
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.5;
+        background-image:
+          linear-gradient(rgba(23, 42, 58, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(23, 42, 58, 0.03) 1px, transparent 1px);
+        background-size: 28px 28px;
+      }
+
+      .shell {
+        width: min(1200px, 94vw);
+        margin: 24px auto 40px;
+        position: relative;
+      }
+
+      .hero {
+        padding: 22px 24px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: linear-gradient(140deg, rgba(255, 255, 255, 0.85), rgba(248, 252, 251, 0.72));
+        box-shadow: 0 10px 30px rgba(32, 40, 52, 0.08);
+        animation: rise 0.45s ease-out;
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-size: clamp(1.35rem, 2.6vw, 2rem);
+        letter-spacing: 0.01em;
+      }
+
+      .hero p {
+        margin: 8px 0 0;
+        color: var(--ink-soft);
+      }
+
+      .grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        gap: 14px;
+      }
+
+      .card {
+        grid-column: span 12;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--card);
+        backdrop-filter: blur(5px);
+        box-shadow: 0 6px 18px rgba(30, 49, 61, 0.08);
+        padding: 16px;
+        animation: rise 0.45s ease-out;
+      }
+
+      .card h2 {
+        margin: 0 0 12px;
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #173447;
+      }
+
+      .card .sub {
+        margin-top: -6px;
+        margin-bottom: 12px;
+        color: var(--ink-soft);
+        font-size: 0.92rem;
+      }
+
+      .step {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.78rem;
+        margin-right: 8px;
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent), #a54820);
+      }
+
+      label {
+        display: block;
+        margin: 10px 0 6px;
+        font-size: 0.88rem;
+        color: #1f4458;
+        font-weight: 600;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(36, 57, 70, 0.22);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      textarea {
+        min-height: 130px;
+        resize: vertical;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        gap: 10px;
+      }
+
+      .col-6 {
+        grid-column: span 6;
+      }
+
+      .col-4 {
+        grid-column: span 4;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font: inherit;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent), #a94b22);
+        box-shadow: 0 6px 14px rgba(160, 74, 35, 0.28);
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+
+      button.secondary {
+        background: linear-gradient(135deg, var(--accent-2), #136d68);
+        box-shadow: 0 6px 14px rgba(19, 109, 104, 0.25);
+      }
+
+      button.neutral {
+        background: linear-gradient(135deg, #60717a, #475861);
+        box-shadow: 0 6px 14px rgba(41, 51, 60, 0.22);
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      button:not(:disabled):hover {
+        transform: translateY(-1px);
+      }
+
+      pre {
+        margin: 0;
+        overflow: auto;
+        border-radius: 10px;
+        border: 1px solid rgba(35, 57, 71, 0.18);
+        background: rgba(17, 32, 43, 0.92);
+        color: #dbe8f1;
+        padding: 12px;
+        font-family: "JetBrains Mono", "Cascadia Mono", monospace;
+        font-size: 0.82rem;
+        max-height: 300px;
+      }
+
+      .console {
+        max-height: 180px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(30, 63, 80, 0.18);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 0.8rem;
+        color: #1f4e62;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .item {
+        border: 1px solid rgba(39, 57, 72, 0.15);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.82);
+        padding: 10px;
+      }
+
+      .item a {
+        color: #0d5f86;
+        text-decoration: none;
+        word-break: break-all;
+      }
+
+      .item a:hover {
+        text-decoration: underline;
+      }
+
+      .meta {
+        margin-top: 4px;
+        color: #5a6f7a;
+        font-size: 0.8rem;
+      }
+
+      .preview {
+        min-height: 170px;
+      }
+
+      .status-ok {
+        color: var(--ok);
+      }
+
+      .status-warn {
+        color: var(--warn);
+      }
+
+      .status-err {
+        color: var(--err);
+      }
+
+      .span-6 {
+        grid-column: span 6;
+      }
+
+      @media (max-width: 920px) {
+        .col-6,
+        .col-4,
+        .span-6 {
+          grid-column: span 12;
+        }
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="shell">
+      <section class="hero">
+        <h1>Analytics AI Kit - Workbench аналитика</h1>
+        <p>Создайте задачу, загрузите материалы и запускайте Analyze / Draft / Gaps / Refine без командной строки.</p>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2><span class="step">1</span>Task setup</h2>
+          <p class="sub">Укажите ID задачи и заполните краткое описание статьи в <code>task.md</code>.</p>
+
+          <label for="taskId">Task ID</label>
+          <input id="taskId" placeholder="operation-history-ft-v1" />
+
+          <label for="taskText">Содержимое task.md</label>
+          <textarea id="taskText" placeholder="Опишите цель статьи, контекст, ограничения и критерий готовности"></textarea>
+
+          <div class="actions">
+            <button id="loadTemplateBtn" class="neutral" type="button">Загрузить шаблон task.md</button>
+            <button id="saveTaskBtn" type="button">Сохранить task.md</button>
+            <button id="refreshBtn" class="secondary" type="button">Обновить состояние</button>
+          </div>
+        </article>
+
+        <article class="card span-6">
+          <h2><span class="step">2</span>Attachments</h2>
+          <p class="sub">Добавьте контекстные документы задачи (.md/.txt/.docx/.pdf).</p>
+
+          <label for="attachments">Файлы вложений</label>
+          <input id="attachments" type="file" multiple />
+
+          <div class="actions">
+            <button id="uploadBtn" type="button">Загрузить вложения</button>
+          </div>
+
+          <h3>Текущие вложения</h3>
+          <div id="attachmentsList" class="list"></div>
+        </article>
+
+        <article class="card span-6">
+          <h2><span class="step">3</span>Generation</h2>
+          <p class="sub">Запускайте pipeline по шагам и смотрите результат сразу.</p>
+
+          <div class="row">
+            <div class="col-4">
+              <label for="docType">Тип документа</label>
+              <select id="docType">
+                <option value="auto">auto</option>
+                <option value="ft">ft</option>
+                <option value="nft">nft</option>
+              </select>
+            </div>
+            <div class="col-8">
+              <label for="refineInstructions">Инструкции для refine</label>
+              <input id="refineInstructions" placeholder="Уточни интеграции, ошибки и критерии приемки" />
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="analyzeBtn" class="secondary" type="button">Analyze task</button>
+            <button id="draftBtn" type="button">Create draft</button>
+            <button id="gapBtn" class="secondary" type="button">Gap analysis</button>
+            <button id="refineBtn" type="button">Refine draft</button>
+          </div>
+
+          <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px">
+            <span class="pill">Поддержка PDF: да</span>
+            <span class="pill">Контекст пакеты: автоматически</span>
+            <span class="pill">Генерация: секционная</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2><span class="step">4</span>Состояние и логи</h2>
+          <pre id="console" class="console"></pre>
+        </article>
+
+        <article class="card span-6">
+          <h2>Analyze output</h2>
+          <pre id="analysisOutput"></pre>
+        </article>
+
+        <article class="card span-6">
+          <h2>Artifacts</h2>
+          <h3>Drafts</h3>
+          <div id="draftsList" class="list"></div>
+          <h3>Reviews</h3>
+          <div id="reviewsList" class="list"></div>
+          <h3>Context packs</h3>
+          <div id="packsList" class="list"></div>
+        </article>
+
+        <article class="card span-6">
+          <h2>Latest draft preview</h2>
+          <pre id="draftPreview" class="preview"></pre>
+        </article>
+
+        <article class="card span-6">
+          <h2>Latest gaps preview</h2>
+          <pre id="gapsPreview" class="preview"></pre>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      const consoleEl = $("console");
+      const analysisEl = $("analysisOutput");
+      const draftPreviewEl = $("draftPreview");
+      const gapsPreviewEl = $("gapsPreview");
+
+      function stamp() {
+        return new Date().toLocaleTimeString("ru-RU", { hour12: false });
+      }
+
+      function log(message, level = "ok") {
+        const cssClass = level === "err" ? "status-err" : level === "warn" ? "status-warn" : "status-ok";
+        consoleEl.innerHTML += `<span class="${cssClass}">[${stamp()}]</span> ${message}\n`;
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+
+      function taskId() {
+        return $("taskId").value.trim();
+      }
+
+      function ensureTaskId() {
+        const value = taskId();
+        if (!value) {
+          throw new Error("Укажите Task ID");
+        }
+        return value;
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, options);
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : await response.text();
+
+        if (!response.ok) {
+          const detail = typeof payload === "object" && payload ? payload.detail || JSON.stringify(payload) : String(payload);
+          throw new Error(detail || `HTTP ${response.status}`);
+        }
+
+        return payload;
+      }
+
+      function setBusy(buttonId, busy) {
+        const btn = $(buttonId);
+        btn.disabled = busy;
+      }
+
+      function bytes(value) {
+        if (value < 1024) return `${value} B`;
+        if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+        return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function renderList(containerId, items, kind, taskIdValue) {
+        const root = $(containerId);
+        if (!items || items.length === 0) {
+          root.innerHTML = `<div class="item"><div class="meta">Пока пусто</div></div>`;
+          return;
+        }
+
+        root.innerHTML = items
+          .map((item) => {
+            const href = `/ui/artifacts/${encodeURIComponent(kind)}/${encodeURIComponent(taskIdValue)}/${encodeURIComponent(item.name)}`;
+            return `
+              <div class="item">
+                <a target="_blank" rel="noopener" href="${href}">${item.name}</a>
+                <div class="meta">${item.modified_at} • ${bytes(item.size_bytes)}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function renderAttachments(items) {
+        const root = $("attachmentsList");
+        if (!items || items.length === 0) {
+          root.innerHTML = `<div class="item"><div class="meta">Нет вложений</div></div>`;
+          return;
+        }
+
+        root.innerHTML = items
+          .map(
+            (item) => `
+            <div class="item">
+              <div>${item.name}</div>
+              <div class="meta">${bytes(item.size_bytes)} • ${item.modified_at}</div>
+            </div>
+          `,
+          )
+          .join("");
+      }
+
+      async function loadTemplate() {
+        try {
+          const data = await api("/ui/task-template");
+          $("taskText").value = data.template || "";
+          log("Шаблон task.md загружен");
+        } catch (error) {
+          log(`Не удалось загрузить шаблон: ${error.message}`, "err");
+        }
+      }
+
+      async function saveTask() {
+        const id = ensureTaskId();
+        const taskText = $("taskText").value;
+        if (!taskText.trim()) {
+          throw new Error("Заполните task.md перед сохранением");
+        }
+
+        setBusy("saveTaskBtn", true);
+        try {
+          await api("/ui/create-task", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: id, task_text: taskText }),
+          });
+          log(`task.md сохранен для ${id}`);
+          await refreshState();
+        } finally {
+          setBusy("saveTaskBtn", false);
+        }
+      }
+
+      async function uploadAttachments() {
+        const id = ensureTaskId();
+        const filesInput = $("attachments");
+        if (!filesInput.files || filesInput.files.length === 0) {
+          throw new Error("Выберите хотя бы один файл");
+        }
+
+        setBusy("uploadBtn", true);
+        try {
+          const formData = new FormData();
+          for (const file of filesInput.files) {
+            formData.append("files", file);
+          }
+
+          const result = await api(`/ui/upload-attachments/${encodeURIComponent(id)}`, {
+            method: "POST",
+            body: formData,
+          });
+
+          log(`Загружено файлов: ${result.uploaded.length}`);
+          if (result.rejected.length > 0) {
+            log(`Отклонено файлов: ${result.rejected.length}`, "warn");
+          }
+
+          filesInput.value = "";
+          await refreshState();
+        } finally {
+          setBusy("uploadBtn", false);
+        }
+      }
+
+      async function runAnalyze() {
+        const id = ensureTaskId();
+        setBusy("analyzeBtn", true);
+        try {
+          const data = await api("/analyze-task", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: id }),
+          });
+          analysisEl.textContent = JSON.stringify(data.analysis, null, 2);
+          log(`Analyze выполнен: тип=${data.analysis.document_type}, секций=${data.analysis.sections.length}`);
+          await refreshState();
+        } finally {
+          setBusy("analyzeBtn", false);
+        }
+      }
+
+      async function runDraft() {
+        const id = ensureTaskId();
+        const type = $("docType").value;
+
+        const payload = { task_id: id };
+        if (type !== "auto") {
+          payload.force_document_type = type;
+        }
+
+        setBusy("draftBtn", true);
+        try {
+          const data = await api("/draft", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          log(`Draft создан: ${data.draft.draft_path}`);
+          await refreshState();
+        } finally {
+          setBusy("draftBtn", false);
+        }
+      }
+
+      async function runGap() {
+        const id = ensureTaskId();
+        setBusy("gapBtn", true);
+        try {
+          const data = await api("/gap-analysis", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: id }),
+          });
+          log(`Gap-analysis создан: ${data.gap_analysis.gaps_path}`);
+          await refreshState();
+        } finally {
+          setBusy("gapBtn", false);
+        }
+      }
+
+      async function runRefine() {
+        const id = ensureTaskId();
+        const instructions = $("refineInstructions").value.trim();
+
+        setBusy("refineBtn", true);
+        try {
+          const data = await api("/refine", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: id,
+              instructions: instructions || "Уточни формулировки и убери неоднозначности",
+            }),
+          });
+          log(`Refine завершен: ${data.refine.refined_path}`);
+          await refreshState();
+        } finally {
+          setBusy("refineBtn", false);
+        }
+      }
+
+      async function refreshState() {
+        const id = ensureTaskId();
+        setBusy("refreshBtn", true);
+        try {
+          const data = await api(`/ui/state/${encodeURIComponent(id)}`);
+
+          if (!$("taskText").value.trim() && data.task_text) {
+            $("taskText").value = data.task_text;
+          }
+
+          if (data.analysis) {
+            analysisEl.textContent = JSON.stringify(data.analysis, null, 2);
+          } else if (data.analysis_error) {
+            analysisEl.textContent = data.analysis_error;
+          } else {
+            analysisEl.textContent = "Analyze еще не выполнялся";
+          }
+
+          renderAttachments(data.attachments || []);
+          renderList("draftsList", data.artifacts.drafts || [], "drafts", id);
+          renderList("reviewsList", data.artifacts.reviews || [], "reviews", id);
+          renderList("packsList", data.artifacts.context_packs || [], "context_packs", id);
+
+          draftPreviewEl.textContent = data.latest.draft_preview || "Нет черновика";
+          gapsPreviewEl.textContent = data.latest.gaps_preview || "Нет gap-analysis";
+
+          log(`Состояние обновлено для ${id}`);
+        } finally {
+          setBusy("refreshBtn", false);
+        }
+      }
+
+      async function safeRun(fn) {
+        try {
+          await fn();
+        } catch (error) {
+          log(error.message || String(error), "err");
+        }
+      }
+
+      $("loadTemplateBtn").addEventListener("click", () => safeRun(loadTemplate));
+      $("saveTaskBtn").addEventListener("click", () => safeRun(saveTask));
+      $("uploadBtn").addEventListener("click", () => safeRun(uploadAttachments));
+      $("analyzeBtn").addEventListener("click", () => safeRun(runAnalyze));
+      $("draftBtn").addEventListener("click", () => safeRun(runDraft));
+      $("gapBtn").addEventListener("click", () => safeRun(runGap));
+      $("refineBtn").addEventListener("click", () => safeRun(runRefine));
+      $("refreshBtn").addEventListener("click", () => safeRun(refreshState));
+
+      (async () => {
+        log("Интерфейс готов. Укажите Task ID и начните с шаблона task.md");
+        await safeRun(loadTemplate);
+      })();
+    </script>
+  </body>
+</html>
