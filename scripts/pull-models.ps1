@@ -4,7 +4,7 @@ $ollamaUrl = "http://127.0.0.1:11434"
 $models = @(
   "nomic-embed-text",
   "qwen2.5:7b",
-  "qwen3:14b",
+  "qwen3-coder:14b",
   "gpt-oss:20b"
 )
 

@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.chunking import chunk_text
 from app.documents import collect_supported_files, extract_text
@@ -20,6 +22,10 @@ from app.settings import (
     CONTEXT_PACK_LIMIT,
     DOCS_ROOT,
     DRAFT_MODEL,
+    PIPELINE_DRAFT_MODEL,
+    PIPELINE_GAP_MODEL,
+    PIPELINE_REFINE_MODEL,
+    PIPELINE_SECTION_WORKERS,
     FT_SECTIONS,
     GLOBAL_CONTEXT_CATEGORIES,
     NFT_SECTIONS,
@@ -128,8 +134,33 @@ SECTION_ROUTING: dict[str, RoutingRule] = {
     ),
 }
 
+_PIPELINE_LOCK = threading.RLock()
+
+
+@dataclass
+class PipelineRun:
+    """
+    Runtime metadata for a pipeline job.
+    """
+
+    task_id: str
+    run_id: str
+    state: str
+    started_at: str
+    finished_at: str | None = None
+    stages: list[dict[str, Any]] = field(default_factory=list)
+    result: dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+
+_PIPELINE_RUNS: dict[str, PipelineRun] = {}
+
 TASK_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
 TOKEN_PATTERN = re.compile(r"[a-zA-Zа-яА-Я0-9_]{3,}")
+SERVICE_HINT_PATTERN = re.compile(r"(?im)^\s*(?:сервис|service|component)\s*[:\-]\s*(.+)$")
+TYPE_HINT_PATTERN = re.compile(
+    r"(?im)^\s*(?:тип\s+документа|документ|document\s*type|document_type)\s*[:\-]\s*(ft|nft|auto)$"
+)
 
 FT_HINTS = (
     "бизнес",
@@ -185,6 +216,37 @@ def sanitize_task_id(task_id: str) -> str:
     return normalized
 
 
+def detect_pipeline_patterns(task_text: str) -> dict[str, str | None]:
+    """
+    Parse lightweight metadata from task.md to improve routing and auto-discovery.
+    """
+    lowered = task_text.lower()
+    service_match = SERVICE_HINT_PATTERN.search(task_text)
+    type_match = TYPE_HINT_PATTERN.search(task_text)
+
+    service = None
+    if service_match:
+        service = service_match.group(1).strip().splitlines()[0].strip()
+    elif "микросервис" in lowered and "сервис" in lowered:
+        header_match = re.search(r"(?mi)^#\s*(?:микро)?сервис[:\s-]*(.+)$", task_text)
+        if header_match:
+            service = header_match.group(1).strip()
+
+    if service:
+        service = service.split(" ")[0].strip().lower().replace("`", "")
+
+    detected_type = None
+    if type_match:
+        detected_type = type_match.group(1).lower()
+        if detected_type == "auto":
+            detected_type = None
+
+    return {
+        "service": service,
+        "document_type": detected_type,
+    }
+
+
 def resolve_task_paths(task_id: str) -> tuple[Path, Path, Path]:
     """
     Resolve task directory, task.md and attachments folder.
@@ -198,6 +260,69 @@ def resolve_task_paths(task_id: str) -> tuple[Path, Path, Path]:
         raise WorkflowError(f"Файл task.md не найден для task_id='{safe_task_id}'")
 
     return task_dir, task_path, attachments_dir
+
+
+def normalize_service_fragment(value: str | None) -> str | None:
+    """
+    Normalize service token for filesystem matching and routing.
+    """
+    if not value:
+        return None
+
+    normalized = re.sub(r"[^a-zа-я0-9._-]", "-", value.strip().lower(), flags=re.IGNORECASE)
+    normalized = normalized.strip(".-_")
+    return normalized or None
+
+
+def collect_service_context_candidates(task_dir: Path, service: str | None) -> list[Path]:
+    """
+    Find service-scoped docs from task-specific files and docs hierarchy.
+    """
+    normalized = normalize_service_fragment(service)
+    if not normalized:
+        return []
+
+    tokens = set(normalize_service_fragment(service).split("-")) if normalized else set()
+    if not tokens:
+        return []
+
+    candidates: list[Path] = []
+    search_roots = [DOCS_ROOT / category for category in GLOBAL_CONTEXT_CATEGORIES]
+    search_roots.append(DOCS_ROOT / "services")
+    search_roots.append(task_dir)
+
+    service_markers = (
+        "service",
+        "microservice",
+        "внутрен",
+        "интегра",
+        "business",
+        "architecture",
+        "overview",
+        "api",
+        "requirements",
+        "integration",
+    )
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for path in collect_supported_files(root):
+            rel_path = str(path.relative_to(root)).lower()
+            if any(token in rel_path for token in tokens) and any(
+                marker in rel_path for marker in service_markers
+            ):
+                if path.name.lower() != "task.md":
+                    candidates.append(path)
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        if path not in seen:
+            deduped.append(path)
+            seen.add(path)
+
+    return deduped
 
 
 def tokenize(text: str) -> set[str]:
@@ -218,6 +343,128 @@ def lexical_score(chunk: str, query_tokens: set[str], extra_tokens: set[str]) ->
     query_overlap = len(chunk_tokens & query_tokens)
     extra_overlap = len(chunk_tokens & extra_tokens)
     return (query_overlap * 2.0) + (extra_overlap * 1.0)
+
+
+def run_id() -> str:
+    """
+    Build unique pipeline run identifier.
+    """
+    return f"{utc_timestamp()}_{datetime.now(timezone.utc).microsecond:06d}"
+
+
+def pipeline_status_path(task_id: str, run_id_value: str) -> Path:
+    """
+    Build pipeline status file path.
+    """
+    return ensure_artifacts_dir("pipeline_runs", task_id) / f"{run_id_value}.json"
+
+
+def init_pipeline_status(task_id: str, run_id_value: str, *, stage_names: list[str]) -> PipelineRun:
+    """
+    Initialize in-memory and on-disk pipeline status.
+    """
+    status = PipelineRun(
+        task_id=task_id,
+        run_id=run_id_value,
+        state="running",
+        started_at=utc_iso(),
+        stages=[
+            {
+                "name": name,
+                "state": "pending",
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+            }
+            for name in stage_names
+        ],
+        result={},
+        errors=[],
+    )
+    with _PIPELINE_LOCK:
+        _PIPELINE_RUNS[run_id_value] = status
+    write_pipeline_status(task_id, run_id_value, status)
+    return status
+
+
+def write_pipeline_status(task_id: str, run_id_value: str, status: PipelineRun) -> None:
+    """
+    Persist pipeline status to artifact for UI polling and recovery.
+    """
+    payload = {
+        "task_id": status.task_id,
+        "run_id": status.run_id,
+        "state": status.state,
+        "started_at": status.started_at,
+        "finished_at": status.finished_at,
+        "stages": status.stages or [],
+        "result": status.result or {},
+        "errors": status.errors or [],
+    }
+    pipeline_status_path(task_id, run_id_value).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def update_pipeline_stage(
+    task_id: str,
+    run_id_value: str,
+    stage_name: str,
+    *,
+    state: str,
+    details: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    """
+    Update one pipeline stage and persist status.
+    """
+    with _PIPELINE_LOCK:
+        run = _PIPELINE_RUNS.get(run_id_value)
+        if run is None:
+            return
+
+        for stage in run.stages or []:
+            if stage["name"] == stage_name:
+                if state == "running" and stage.get("started_at") is None:
+                    stage["started_at"] = utc_iso()
+                if state in {"done", "failed", "skipped"}:
+                    stage["finished_at"] = utc_iso()
+                stage["state"] = state
+                if details is not None:
+                    stage["details"] = details
+                if error is not None:
+                    stage["error"] = error
+
+        if error is not None:
+            run.errors.append(error)
+
+        write_pipeline_status(task_id, run_id_value, run)
+
+
+def complete_pipeline_status(task_id: str, run_id_value: str, *, state: str, result: dict[str, Any]) -> None:
+    """
+    Finish pipeline and persist final status.
+    """
+    with _PIPELINE_LOCK:
+        run = _PIPELINE_RUNS.get(run_id_value)
+        if run is None:
+            return
+        run.state = state
+        run.finished_at = utc_iso()
+        run.result = result
+        write_pipeline_status(task_id, run_id_value, run)
+
+
+def load_pipeline_status(task_id: str, run_id_value: str) -> dict[str, Any]:
+    """
+    Load pipeline status from disk for UI polling.
+    """
+    path = pipeline_status_path(task_id, run_id_value)
+    if not path.exists():
+        raise WorkflowError(f"Запись о пайплайне не найдена: {run_id_value}")
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def to_relative_label(path: Path, root: Path) -> str:
@@ -293,9 +540,23 @@ def analyze_task(task_id: str) -> dict[str, Any]:
         raise WorkflowError("Файл task.md пустой")
 
     attachment_files = collect_supported_files(attachments_dir)
+    parsed = detect_pipeline_patterns(task_text)
+    force_type = parsed.get("document_type")
+    service = parsed.get("service")
 
-    document_type, detection_meta = detect_document_type(task_text)
+    document_type, detection_meta = (force_type, {}) if force_type else detect_document_type(task_text)
+    if force_type:
+        detection_meta = {
+            "ft_score": None,
+            "nft_score": None,
+            "matched_ft_hints": [],
+            "matched_nft_hints": [],
+            "forced_by_task": force_type,
+        }
+
     sections = FT_SECTIONS if document_type == "ft" else NFT_SECTIONS
+
+    service_docs = collect_service_context_candidates(task_dir, service)
 
     return {
         "task_id": safe_task_id,
@@ -306,6 +567,9 @@ def analyze_task(task_id: str) -> dict[str, Any]:
         "attachments_count": len(attachment_files),
         "task_summary": build_task_summary(task_text),
         "document_type": document_type,
+        "service": service,
+        "service_context_candidates": [to_relative_label(path, TASKS_ROOT) for path in service_docs],
+        "service_context_count": len(service_docs),
         "sections": sections,
         "section_display_names": {
             section: SECTION_DISPLAY_NAMES.get(section, section) for section in sections
@@ -338,6 +602,7 @@ def collect_task_snippets(
     attachments_dir: Path,
     query_text: str,
     section: str,
+    service_paths: list[Path] | None = None,
 ) -> list[ScoredSnippet]:
     """
     Collect and rank snippets from task.md and task attachments.
@@ -371,6 +636,23 @@ def collect_task_snippets(
                     source_level="attachment",
                     source_path=rel_path,
                     category="attachment",
+                    score=score,
+                    text=chunk,
+                )
+            )
+
+    for file_path in service_paths or []:
+        rel_path = to_relative_label(file_path, TASKS_ROOT if TASKS_ROOT in file_path.parents else DOCS_ROOT)
+        file_path_lower = rel_path.lower()
+        path_boost = 2.0 if any(token in file_path_lower for token in section_tokens) else 0.5
+
+        for chunk in file_text_chunks(file_path):
+            score = lexical_score(chunk, query_tokens, section_tokens) + 1.8 + path_boost
+            snippets.append(
+                ScoredSnippet(
+                    source_level="service_context",
+                    source_path=rel_path,
+                    category="service",
                     score=score,
                     text=chunk,
                 )
@@ -540,6 +822,10 @@ def build_context_pack(
 
     context_limit = limit or CONTEXT_PACK_LIMIT
     rule = choose_rule(section)
+    service_files: list[Path] = []
+    service = (resolved_analysis.get("service") or "").strip() if isinstance(resolved_analysis, dict) else ""
+    if service:
+        service_files = collect_service_context_candidates(task_dir, service)
 
     query_text = "\n".join(
         [
@@ -555,6 +841,7 @@ def build_context_pack(
         attachments_dir=attachments_dir,
         query_text=query_text,
         section=section,
+        service_paths=service_files,
     )
 
     global_quota = max(2, context_limit // 2)
@@ -615,6 +902,15 @@ def build_context_pack(
             "task_dir": str(task_dir),
             "docs_root": str(DOCS_ROOT),
         },
+    }
+
+    task_level_snippets = [snippet for snippet in task_snippets if snippet.source_level in {"task", "attachment"}]
+    context_pack["coverage"] = {
+        "source_count": len(selected),
+        "task_level_snippets": len(task_level_snippets),
+        "service_snippets": len([snippet for snippet in selected if snippet.source_level == "service_context"]),
+        "global_snippets": len([snippet for snippet in selected if snippet.source_level.startswith("global")]),
+        "limit": context_limit,
     }
 
     context_dir = ensure_artifacts_dir("context_packs", safe_task_id)
@@ -705,69 +1001,138 @@ def validate_sections(document_type: str, sections: list[str] | None) -> list[st
     return sections
 
 
+def extract_draft_document_type(markdown: str) -> str | None:
+    """
+    Read document_type value from draft metadata block.
+    """
+    for line in markdown.splitlines():
+        normalized = line.strip()
+        if normalized.startswith("_document_type:") and normalized.endswith("_"):
+            value = normalized[len("_document_type:") : -1].strip()
+            candidate = value.strip("_").lower()
+            if candidate in {"ft", "nft"}:
+                return candidate
+        if normalized.startswith("## "):
+            continue
+        if normalized.startswith("# "):
+            continue
+    return None
+
+
+def generate_section_body(
+    *,
+    task_id: str,
+    section: str,
+    document_type: str,
+    task_text: str,
+    analysis: dict[str, Any],
+    model: str,
+    section_template: str,
+) -> tuple[str, dict[str, str]]:
+    """
+    Generate one section text and persist it as intermediate artifact.
+    """
+    context_pack = build_context_pack(
+        task_id=task_id,
+        section=section,
+        analysis=analysis,
+    )
+    context_pack_paths = {section: context_pack["context_pack_path"]}
+
+    context_snippets = [
+        ScoredSnippet(
+            source_level=item["source_level"],
+            source_path=item["source_path"],
+            category=item["category"],
+            score=float(item["score"]),
+            text=item["text"],
+        )
+        for item in context_pack["sources"]
+    ]
+
+    prompt = render_draft_prompt(
+        document_type=document_type,
+        section=section,
+        section_template=section_template,
+        task_text=task_text,
+        context_block=format_context_block(context_snippets),
+    )
+
+    generated = generate_text(
+        model=model,
+        prompt=prompt,
+        system_prompt=(
+            "Ты senior системный аналитик. Пиши на русском языке, "
+            "строго по входному контексту, без вымышленных фактов."
+        ),
+        temperature=0.1,
+    )
+    return generated.strip(), context_pack_paths
+
+
 def create_draft(
     *,
     task_id: str,
     force_document_type: str | None = None,
     sections: list[str] | None = None,
     model: str | None = None,
+    analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Generate a section-based draft document for the task.
     """
     safe_task_id = sanitize_task_id(task_id)
-    analysis = analyze_task(safe_task_id)
+    resolved_analysis = analysis or analyze_task(safe_task_id)
 
     if force_document_type and force_document_type not in {"ft", "nft"}:
         raise WorkflowError("`force_document_type` должен быть `ft` или `nft`")
 
-    document_type = force_document_type or analysis["document_type"]
+    document_type = force_document_type or resolved_analysis["document_type"]
     target_sections = validate_sections(document_type, sections)
 
     _, task_path, _ = resolve_task_paths(safe_task_id)
     task_text = task_path.read_text(encoding="utf-8", errors="ignore")
 
-    generation_model = model or DRAFT_MODEL
+    generation_model = model or PIPELINE_DRAFT_MODEL or DRAFT_MODEL
     section_bodies: dict[str, str] = {}
     context_pack_paths: dict[str, str] = {}
+    section_timings: dict[str, float] = {}
+    generation_errors: dict[str, str] = {}
 
-    for section in target_sections:
-        context_pack = build_context_pack(
+    draft_tmp_dir = ensure_artifacts_dir("drafts", safe_task_id) / "tmp"
+    draft_tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _section_worker(section: str) -> tuple[str, str, dict[str, str], float]:
+        section_start = datetime.now(timezone.utc)
+        section_template = load_section_template(document_type, section)
+        body, pack_paths = generate_section_body(
             task_id=safe_task_id,
             section=section,
-            analysis=analysis,
-        )
-        context_pack_paths[section] = context_pack["context_pack_path"]
-
-        context_snippets = [
-            ScoredSnippet(
-                source_level=item["source_level"],
-                source_path=item["source_path"],
-                category=item["category"],
-                score=float(item["score"]),
-                text=item["text"],
-            )
-            for item in context_pack["sources"]
-        ]
-
-        prompt = render_draft_prompt(
             document_type=document_type,
-            section=section,
-            section_template=load_section_template(document_type, section),
             task_text=task_text,
-            context_block=format_context_block(context_snippets),
-        )
-
-        generated = generate_text(
+            analysis=resolved_analysis,
             model=generation_model,
-            prompt=prompt,
-            system_prompt=(
-                "Ты senior системный аналитик. Пиши на русском языке, "
-                "строго по входному контексту, без вымышленных фактов."
-            ),
-            temperature=0.1,
+            section_template=section_template,
         )
-        section_bodies[section] = generated.strip()
+        section_file = draft_tmp_dir / f"{section}.md"
+        section_file.write_text(body, encoding="utf-8")
+        elapsed = (datetime.now(timezone.utc) - section_start).total_seconds()
+        return section, body, pack_paths, round(elapsed, 3)
+
+    with ThreadPoolExecutor(max_workers=max(1, PIPELINE_SECTION_WORKERS)) as executor:
+        futures = {executor.submit(_section_worker, section): section for section in target_sections}
+        for future in as_completed(futures):
+            section = futures[future]
+            try:
+                section_name, generated, pack_paths, elapsed = future.result()
+                section_bodies[section_name] = generated
+                section_timings[section_name] = elapsed
+                context_pack_paths.update(pack_paths)
+            except Exception as exc:  # noqa: BLE001
+                generation_errors[section] = str(exc)
+                section_bodies[section] = (
+                    f"_Не удалось сгенерировать секцию {section}: {exc}_"
+                )
 
     title = "# Черновик аналитического документа"
     draft_markdown = assemble_document(
@@ -789,7 +1154,9 @@ def create_draft(
         "sections": target_sections,
         "draft_path": str(draft_path),
         "context_pack_paths": context_pack_paths,
-        "analysis": analysis,
+        "analysis": resolved_analysis,
+        "section_timings": section_timings,
+        "section_errors": generation_errors,
     }
 
 
@@ -842,7 +1209,7 @@ def run_gap_analysis(
         },
     )
 
-    review_model = model or REVIEW_MODEL
+    review_model = model or PIPELINE_GAP_MODEL or REVIEW_MODEL
     gaps_markdown = generate_text(
         model=review_model,
         prompt=prompt,
@@ -899,24 +1266,27 @@ def refine_draft(
     draft_path: str | None = None,
     instructions: str | None = None,
     model: str | None = None,
+    target_sections: list[str] | None = None,
+    analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Refine existing draft section-by-section using refine prompt.
     """
     safe_task_id = sanitize_task_id(task_id)
-    analysis = analyze_task(safe_task_id)
+    resolved_analysis = analysis or analyze_task(safe_task_id)
     _, task_path, _ = resolve_task_paths(safe_task_id)
 
     resolved_draft_path = resolve_existing_draft(safe_task_id, draft_path)
     draft_text = resolved_draft_path.read_text(encoding="utf-8", errors="ignore")
     task_text = task_path.read_text(encoding="utf-8", errors="ignore")
 
-    document_type = analysis["document_type"]
-    target_sections = validate_sections(document_type, analysis["sections"])
+    latest_doc_type = extract_draft_document_type(draft_text)
+    document_type = latest_doc_type or resolved_analysis["document_type"]
+    target_sections = validate_sections(document_type, target_sections or resolved_analysis.get("sections"))
 
     existing_sections = split_markdown_sections(draft_text)
     refine_prompt_template = load_text_file(DOCS_ROOT / "templates" / "prompts" / "refine.md")
-    refine_model = model or REFINE_MODEL
+    refine_model = model or PIPELINE_REFINE_MODEL or REFINE_MODEL
     refine_notes = (instructions or "Уточни формулировки, добавь проверяемость и убери неоднозначности.").strip()
 
     refined_bodies: dict[str, str] = {}
@@ -985,4 +1355,203 @@ def refine_draft(
         "sections": target_sections,
         "model": refine_model,
         "context_pack_paths": context_pack_paths,
+    }
+
+
+def run_pipeline(
+    *,
+    task_id: str,
+    run_gaps: bool = True,
+    run_refine: bool = False,
+    force_document_type: str | None = None,
+    sections: list[str] | None = None,
+    refine_instructions: str | None = None,
+    run_target_sections: list[str] | None = None,
+    draft_model: str | None = None,
+    gap_model: str | None = None,
+    refine_model: str | None = None,
+    run_id_value: str | None = None,
+) -> dict[str, Any]:
+    """
+    Execute end-to-end pipeline and return artifact paths.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    run_identifier = run_id_value or run_id()
+
+    analysis = analyze_task(safe_task_id)
+
+    resolved_document_type = force_document_type or analysis["document_type"]
+    if resolved_document_type not in {"ft", "nft"}:
+        raise WorkflowError("`force_document_type` должен быть `ft` или `nft`")
+
+    target_sections = validate_sections(resolved_document_type, sections)
+
+    init_pipeline_status(
+        safe_task_id,
+        run_identifier,
+        stage_names=["analyze", "draft", "gaps", "refine", "finalize"],
+    )
+
+    timings: dict[str, float] = {}
+    result: dict[str, Any] = {
+        "run_id": run_identifier,
+        "task_id": safe_task_id,
+        "document_type": resolved_document_type,
+        "sections": target_sections,
+        "artifacts": {},
+        "timings": timings,
+    }
+
+    try:
+        update_pipeline_stage(safe_task_id, run_identifier, "analyze", state="running")
+        update_pipeline_stage(
+            safe_task_id,
+            run_identifier,
+            "analyze",
+            state="done",
+            details={"document_type": resolved_document_type},
+        )
+
+        stage_started = datetime.now(timezone.utc)
+        update_pipeline_stage(safe_task_id, run_identifier, "draft", state="running")
+        draft_result = create_draft(
+            task_id=safe_task_id,
+            force_document_type=resolved_document_type,
+            sections=target_sections,
+            model=draft_model or PIPELINE_DRAFT_MODEL or DRAFT_MODEL,
+            analysis=analysis,
+        )
+        timings["draft_seconds"] = (datetime.now(timezone.utc) - stage_started).total_seconds()
+        update_pipeline_stage(
+            safe_task_id,
+            run_identifier,
+            "draft",
+            state="done",
+            details={"draft_path": draft_result["draft_path"]},
+        )
+
+        result["artifacts"]["draft"] = draft_result["draft_path"]
+        result["artifact_sections"] = target_sections
+
+        if run_gaps:
+            gap_started = datetime.now(timezone.utc)
+            update_pipeline_stage(safe_task_id, run_identifier, "gaps", state="running")
+            gaps = run_gap_analysis(
+                task_id=safe_task_id,
+                model=gap_model or PIPELINE_GAP_MODEL or REVIEW_MODEL,
+                draft_path=draft_result["draft_path"],
+            )
+            timings["gaps_seconds"] = (datetime.now(timezone.utc) - gap_started).total_seconds()
+            update_pipeline_stage(
+                safe_task_id,
+                run_identifier,
+                "gaps",
+                state="done",
+                details={"gaps_path": gaps["gaps_path"]},
+            )
+            result["artifacts"]["gaps"] = gaps["gaps_path"]
+        else:
+            update_pipeline_stage(
+                safe_task_id,
+                run_identifier,
+                "gaps",
+                state="skipped",
+                details={"reason": "disabled"},
+            )
+
+        if run_refine:
+            refine_started = datetime.now(timezone.utc)
+            update_pipeline_stage(safe_task_id, run_identifier, "refine", state="running")
+            refined = refine_draft(
+                task_id=safe_task_id,
+                draft_path=draft_result["draft_path"],
+                instructions=refine_instructions,
+                model=refine_model or PIPELINE_REFINE_MODEL or REFINE_MODEL,
+                target_sections=run_target_sections or None,
+                analysis=analysis,
+            )
+            timings["refine_seconds"] = (datetime.now(timezone.utc) - refine_started).total_seconds()
+            update_pipeline_stage(
+                safe_task_id,
+                run_identifier,
+                "refine",
+                state="done",
+                details={"refined_path": refined["refined_path"]},
+            )
+            result["artifacts"]["refine"] = refined["refined_path"]
+            result["document_type"] = refined["document_type"]
+            result["sections"] = refined["sections"]
+            result["latest_draft"] = refined["refined_path"]
+            result["source_draft"] = refined["source_draft_path"]
+        else:
+            update_pipeline_stage(
+                safe_task_id,
+                run_identifier,
+                "refine",
+                state="skipped",
+                details={"reason": "disabled"},
+            )
+
+        result["status"] = "ok"
+        result["timings"] = timings
+        update_pipeline_stage(safe_task_id, run_identifier, "finalize", state="done", details={"final_status": "ok"})
+        complete_pipeline_status(safe_task_id, run_identifier, state="completed", result=result)
+        return result
+
+    except Exception as exc:  # noqa: BLE001
+        update_pipeline_stage(
+            safe_task_id,
+            run_identifier,
+            "finalize",
+            state="failed",
+            error=str(exc),
+        )
+        result["status"] = "failed"
+        result["error"] = str(exc)
+        complete_pipeline_status(safe_task_id, run_identifier, state="failed", result=result)
+        raise
+
+
+def start_pipeline_run(
+    *,
+    task_id: str,
+    run_gaps: bool = True,
+    run_refine: bool = False,
+    force_document_type: str | None = None,
+    sections: list[str] | None = None,
+    refine_instructions: str | None = None,
+    run_target_sections: list[str] | None = None,
+    draft_model: str | None = None,
+    gap_model: str | None = None,
+    refine_model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Start async pipeline and return run metadata.
+    """
+    run_identifier = run_id()
+    safe_task_id = sanitize_task_id(task_id)
+
+    def worker() -> None:
+        run_pipeline(
+            task_id=safe_task_id,
+            run_gaps=run_gaps,
+            run_refine=run_refine,
+            force_document_type=force_document_type,
+            sections=sections,
+            refine_instructions=refine_instructions,
+            run_target_sections=run_target_sections,
+            draft_model=draft_model,
+            gap_model=gap_model,
+            refine_model=refine_model,
+            run_id_value=run_identifier,
+        )
+
+    thread = threading.Thread(target=worker, name=f"pipeline-{run_identifier}", daemon=True)
+    thread.start()
+
+    return {
+        "task_id": safe_task_id,
+        "run_id": run_identifier,
+        "state": "running",
+        "status_path": str(pipeline_status_path(safe_task_id, run_identifier)),
     }

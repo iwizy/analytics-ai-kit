@@ -259,6 +259,15 @@
         min-height: 170px;
       }
 
+      .mini {
+        font-size: 0.82rem;
+      }
+
+      .kpi {
+        display: inline-block;
+        margin-right: 10px;
+      }
+
       .status-ok {
         color: var(--ok);
       }
@@ -300,7 +309,10 @@
     <main class="shell">
       <section class="hero">
         <h1>Analytics AI Kit - Workbench аналитика</h1>
-        <p>Создайте задачу, загрузите материалы и запускайте Analyze / Draft / Gaps / Refine без командной строки.</p>
+        <p>
+          Создайте задачу, загрузите материалы, управляйте локальным стеком и запускайте Analyze / Draft / Gaps / Refine
+          без командной строки.
+        </p>
       </section>
 
       <section class="grid">
@@ -360,7 +372,27 @@
             <button id="draftBtn" type="button">Create draft</button>
             <button id="gapBtn" class="secondary" type="button">Gap analysis</button>
             <button id="refineBtn" type="button">Refine draft</button>
+            <button id="pipelineBtn" class="secondary" type="button">Run full pipeline</button>
           </div>
+
+          <div class="row" style="margin-top: 10px">
+            <div class="col-4">
+              <label><input id="runGaps" type="checkbox" checked /> Запустить gap-analysis</label>
+            </div>
+            <div class="col-4">
+              <label><input id="runRefine" type="checkbox" /> Запустить refine</label>
+            </div>
+            <div class="col-4">
+              <label for="pipelineRunType">Тип документа</label>
+              <select id="pipelineRunType">
+                <option value="auto">auto</option>
+                <option value="ft">ft</option>
+                <option value="nft">nft</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="pipelineOutput" class="preview" style="margin-top: 8px; max-height: 180px"></div>
 
           <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px">
             <span class="pill">Поддержка PDF: да</span>
@@ -370,7 +402,47 @@
         </article>
 
         <article class="card">
-          <h2><span class="step">4</span>Состояние и логи</h2>
+          <h2><span class="step">4</span>Operations</h2>
+          <p class="sub">Управление контейнерами и моделями Ollama прямо из UI.</p>
+
+          <div class="actions">
+            <button id="opsRefreshBtn" class="neutral" type="button">Обновить Ops статус</button>
+            <button id="stackStartBtn" class="secondary" type="button">Запустить стек</button>
+            <button id="stackRestartBtn" class="secondary" type="button">Перезапустить стек</button>
+            <button id="stackStopBtn" class="neutral" type="button">Остановить стек</button>
+            <button id="pullModelsBtn" type="button">Скачать обязательные модели</button>
+          </div>
+
+          <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px">
+            <span class="pill">Docker socket</span>
+            <span class="pill">Контейнеры: qdrant/ollama</span>
+            <span class="pill">Модели: required set</span>
+          </div>
+
+          <label>Docker</label>
+          <div id="opsDockerState" class="mini"></div>
+
+          <label>Service health</label>
+          <div id="opsServiceHealth" class="list"></div>
+
+          <div class="row" style="margin-top: 10px">
+            <div class="col-6">
+              <label>Containers</label>
+              <div id="opsContainers" class="list"></div>
+            </div>
+            <div class="col-6">
+              <label>Required models</label>
+              <div id="opsModels" class="list"></div>
+            </div>
+          </div>
+
+          <label style="margin-top: 12px">Model pull status</label>
+          <div id="modelPullStatus" class="mini"></div>
+          <pre id="modelPullLog" class="console"></pre>
+        </article>
+
+        <article class="card">
+          <h2><span class="step">5</span>Состояние и логи</h2>
           <pre id="console" class="console"></pre>
         </article>
 
@@ -408,6 +480,17 @@
       const analysisEl = $("analysisOutput");
       const draftPreviewEl = $("draftPreview");
       const gapsPreviewEl = $("gapsPreview");
+      const pipelineOutputEl = $("pipelineOutput");
+      const opsDockerEl = $("opsDockerState");
+      const opsServiceHealthEl = $("opsServiceHealth");
+      const opsContainersEl = $("opsContainers");
+      const opsModelsEl = $("opsModels");
+      const modelPullStatusEl = $("modelPullStatus");
+      const modelPullLogEl = $("modelPullLog");
+
+      let opsPollTimer = null;
+      let pipelinePollTimer = null;
+      let activePipelineRunId = null;
 
       function stamp() {
         return new Date().toLocaleTimeString("ru-RU", { hour12: false });
@@ -451,10 +534,36 @@
         btn.disabled = busy;
       }
 
+      function setPipelineButtonsBusy(busy) {
+        setBusy("analyzeBtn", busy);
+        setBusy("draftBtn", busy);
+        setBusy("gapBtn", busy);
+        setBusy("refineBtn", busy);
+        setBusy("pipelineBtn", busy);
+      }
+
       function bytes(value) {
         if (value < 1024) return `${value} B`;
         if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
         return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function statusClass(ok) {
+        return ok ? "status-ok" : "status-err";
+      }
+
+      function ensureOpsPolling(enabled) {
+        if (enabled && !opsPollTimer) {
+          opsPollTimer = setInterval(() => {
+            safeRun(() => refreshOpsStatus({ silent: true }));
+          }, 3000);
+          return;
+        }
+
+        if (!enabled && opsPollTimer) {
+          clearInterval(opsPollTimer);
+          opsPollTimer = null;
+        }
       }
 
       function renderList(containerId, items, kind, taskIdValue) {
@@ -494,6 +603,149 @@
           `,
           )
           .join("");
+      }
+
+      function renderServiceHealth(services) {
+        const entries = Object.entries(services || {});
+        if (entries.length === 0) {
+          opsServiceHealthEl.innerHTML = `<div class="item"><div class="meta">Нет данных</div></div>`;
+          return;
+        }
+
+        opsServiceHealthEl.innerHTML = entries
+          .map(([name, state]) => {
+            const ok = Boolean(state && state.ok);
+            const code = state && state.status_code !== null && state.status_code !== undefined ? `HTTP ${state.status_code}` : "no http";
+            const err = state && state.error ? ` • ${state.error}` : "";
+            return `
+              <div class="item">
+                <div><strong>${name}</strong>: <span class="${statusClass(ok)}">${ok ? "OK" : "FAIL"}</span></div>
+                <div class="meta">${code}${err}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function renderContainers(containers) {
+        const entries = Object.entries(containers || {});
+        if (entries.length === 0) {
+          opsContainersEl.innerHTML = `<div class="item"><div class="meta">Нет данных</div></div>`;
+          return;
+        }
+
+        opsContainersEl.innerHTML = entries
+          .map(([service, state]) => {
+            const running = Boolean(state && state.running);
+            const exists = Boolean(state && state.exists);
+            const stateText = exists ? state.state || "unknown" : "not found";
+            const errorText = state && state.error ? ` • ${state.error}` : "";
+            return `
+              <div class="item">
+                <div><strong>${service}</strong>: <span class="${statusClass(running)}">${running ? "running" : "stopped"}</span></div>
+                <div class="meta">${state.container_name || "-"} • ${stateText}${errorText}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function renderModels(models, modelPull) {
+        const required = (models && models.required) || [];
+        const readySet = new Set((models && models.ready_required) || []);
+        const perModel = (modelPull && modelPull.per_model) || {};
+
+        if (required.length === 0) {
+          opsModelsEl.innerHTML = `<div class="item"><div class="meta">Нет обязательных моделей</div></div>`;
+          return;
+        }
+
+        opsModelsEl.innerHTML = required
+          .map((model) => {
+            const installed = readySet.has(model);
+            const progress = perModel[model];
+            const statusLine = progress
+              ? `${progress.status}${progress.progress !== null && progress.progress !== undefined ? ` • ${(progress.progress * 100).toFixed(1)}%` : ""}`
+              : installed
+                ? "installed"
+                : "missing";
+            const errorText = progress && progress.error ? ` • ${progress.error}` : "";
+
+            return `
+              <div class="item">
+                <div><strong>${model}</strong>: <span class="${statusClass(installed)}">${installed ? "ready" : "missing"}</span></div>
+                <div class="meta">${statusLine}${errorText}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function renderModelPull(modelPull) {
+        const pull = modelPull || {};
+        const running = Boolean(pull.running);
+        const status = pull.status || "idle";
+        const started = pull.started_at || "-";
+        const finished = pull.finished_at || "-";
+        const requested = Array.isArray(pull.requested_models) ? pull.requested_models.length : 0;
+
+        modelPullStatusEl.innerHTML = `
+          <span class="kpi">status: <strong>${status}</strong></span>
+          <span class="kpi">running: <strong class="${statusClass(running)}">${running ? "yes" : "no"}</strong></span>
+          <span class="kpi">models: <strong>${requested}</strong></span>
+          <span class="kpi">started: <strong>${started}</strong></span>
+          <span class="kpi">finished: <strong>${finished}</strong></span>
+        `;
+        modelPullLogEl.textContent = (pull.logs || []).join("\n") || "Пока пусто";
+
+        ensureOpsPolling(running);
+      }
+
+      function renderPipelineStatus(pipeline) {
+        if (!pipeline) {
+          pipelineOutputEl.textContent = "Пайплайн не запущен.";
+          return;
+        }
+
+        const stages = pipeline.stages || [];
+        const errors = Array.isArray(pipeline.errors) ? pipeline.errors : [];
+        const lines = [
+          `Pipeline run_id: ${pipeline.run_id}`,
+          `Task: ${pipeline.task_id}`,
+          `State: ${pipeline.state}`,
+          `Started: ${pipeline.started_at}`,
+          `Finished: ${pipeline.finished_at || "-"}`,
+          "",
+        ];
+
+        lines.push("Этапы:");
+        for (const stage of stages) {
+          const status = stage.state || "unknown";
+          const startedAt = stage.started_at ? `start=${stage.started_at}` : "start=-";
+          const finishedAt = stage.finished_at ? `finish=${stage.finished_at}` : "finish=-";
+          const detail = stage.details ? ` | details: ${JSON.stringify(stage.details)}` : "";
+          const error = stage.error ? ` | error: ${stage.error}` : "";
+          lines.push(`- ${stage.name}: ${status} (${startedAt}, ${finishedAt})${detail}${error}`);
+        }
+
+        if (errors.length > 0) {
+          lines.push("", "Ошибки:", ...errors.map((error) => `- ${error}`));
+        }
+
+        pipelineOutputEl.textContent = lines.join("\n");
+      }
+
+      function renderOpsState(operations) {
+        const ops = operations || {};
+        const docker = ops.docker || {};
+        const dockerOk = Boolean(docker.available);
+        const dockerErr = docker.error ? ` • ${docker.error}` : "";
+
+        opsDockerEl.innerHTML = `<span class="${statusClass(dockerOk)}">${dockerOk ? "available" : "unavailable"}</span> • ${docker.socket_path || "-"}${dockerErr}`;
+        renderServiceHealth(ops.services || {});
+        renderContainers(ops.containers || {});
+        renderModels(ops.models || {}, ops.model_pull || {});
+        renderModelPull(ops.model_pull || {});
       }
 
       async function loadTemplate() {
@@ -555,6 +807,135 @@
           await refreshState();
         } finally {
           setBusy("uploadBtn", false);
+        }
+      }
+
+      async function refreshOpsStatus({ silent = false } = {}) {
+        setBusy("opsRefreshBtn", true);
+        try {
+          const data = await api("/ui/ops/status");
+          renderOpsState(data.operations || {});
+
+          if (!silent) {
+            const missing = ((data.operations || {}).models || {}).missing || [];
+            log(`Ops статус обновлен. Missing models: ${missing.length}`);
+          }
+        } finally {
+          setBusy("opsRefreshBtn", false);
+        }
+      }
+
+      async function runContainerAction(action) {
+        const buttons = ["stackStartBtn", "stackStopBtn", "stackRestartBtn"];
+        buttons.forEach((id) => setBusy(id, true));
+        try {
+          const data = await api(`/ui/ops/containers/${encodeURIComponent(action)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+
+          const results = (data.operation && data.operation.results) || [];
+          const okCount = results.filter((item) => item.ok).length;
+          const failCount = results.length - okCount;
+          log(`Container action '${action}': ok=${okCount}, fail=${failCount}`, failCount > 0 ? "warn" : "ok");
+          await refreshOpsStatus({ silent: true });
+        } finally {
+          buttons.forEach((id) => setBusy(id, false));
+        }
+      }
+
+      async function runPullModels() {
+        setBusy("pullModelsBtn", true);
+        try {
+          const data = await api("/ui/ops/models/pull", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+
+          if (data.started) {
+            log("Запущена загрузка обязательных моделей");
+          } else {
+            log(`Загрузка моделей уже выполняется: ${data.message}`, "warn");
+          }
+          await refreshOpsStatus({ silent: true });
+        } finally {
+          setBusy("pullModelsBtn", false);
+        }
+      }
+
+      function stopPipelinePoll() {
+        if (pipelinePollTimer) {
+          clearInterval(pipelinePollTimer);
+          pipelinePollTimer = null;
+        }
+      }
+
+      async function pollPipelineStatus(taskId, runId) {
+        try {
+          const data = await api(`/pipeline-status/${encodeURIComponent(taskId)}/${encodeURIComponent(runId)}`);
+          renderPipelineStatus(data.pipeline || {});
+
+          const state = data.pipeline && data.pipeline.state;
+          if (state === "completed" || state === "failed") {
+            stopPipelinePoll();
+            setPipelineButtonsBusy(false);
+            await refreshState();
+          }
+        } catch (error) {
+          throw error;
+        }
+      }
+
+      async function runPipeline() {
+        const id = ensureTaskId();
+        const type = $("pipelineRunType").value || "auto";
+        pipelineOutputEl.textContent = "Запускаем full pipeline...";
+        const payload = {
+          task_id: id,
+          run_gaps: $("runGaps").checked,
+          run_refine: $("runRefine").checked,
+          async_mode: true,
+        };
+
+        if (type !== "auto") {
+          payload.force_document_type = type;
+        }
+
+        const instructions = $("refineInstructions").value.trim();
+        if (instructions) {
+          payload.refine_instructions = instructions;
+        }
+
+        setPipelineButtonsBusy(true);
+        try {
+          const data = await api("/run-pipeline", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const pipeline = data.pipeline || {};
+          activePipelineRunId = pipeline.run_id || null;
+          renderPipelineStatus(pipeline);
+
+          if (!activePipelineRunId) {
+            throw new Error("Невозможно получить run_id для отслеживания");
+          }
+
+          stopPipelinePoll();
+          setPipelineButtonsBusy(true);
+          pipelinePollTimer = setInterval(() => {
+            safeRun(() => pollPipelineStatus(id, activePipelineRunId));
+          }, 1500);
+
+          await pollPipelineStatus(id, activePipelineRunId);
+          log(`Pipeline запущен: ${activePipelineRunId}`);
+        } finally {
+          if (!pipelinePollTimer) {
+            setPipelineButtonsBusy(false);
+          }
         }
       }
 
@@ -678,15 +1059,22 @@
       $("loadTemplateBtn").addEventListener("click", () => safeRun(loadTemplate));
       $("saveTaskBtn").addEventListener("click", () => safeRun(saveTask));
       $("uploadBtn").addEventListener("click", () => safeRun(uploadAttachments));
+      $("opsRefreshBtn").addEventListener("click", () => safeRun(() => refreshOpsStatus()));
+      $("stackStartBtn").addEventListener("click", () => safeRun(() => runContainerAction("start")));
+      $("stackRestartBtn").addEventListener("click", () => safeRun(() => runContainerAction("restart")));
+      $("stackStopBtn").addEventListener("click", () => safeRun(() => runContainerAction("stop")));
+      $("pullModelsBtn").addEventListener("click", () => safeRun(runPullModels));
       $("analyzeBtn").addEventListener("click", () => safeRun(runAnalyze));
       $("draftBtn").addEventListener("click", () => safeRun(runDraft));
       $("gapBtn").addEventListener("click", () => safeRun(runGap));
       $("refineBtn").addEventListener("click", () => safeRun(runRefine));
+      $("pipelineBtn").addEventListener("click", () => safeRun(runPipeline));
       $("refreshBtn").addEventListener("click", () => safeRun(refreshState));
 
       (async () => {
         log("Интерфейс готов. Укажите Task ID и начните с шаблона task.md");
         await safeRun(loadTemplate);
+        await safeRun(() => refreshOpsStatus({ silent: true }));
       })();
     </script>
   </body>

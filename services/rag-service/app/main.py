@@ -8,11 +8,12 @@ import mimetypes
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.ingest import reindex_all_documents
+from app.operations import control_containers, get_operations_status, start_models_pull
 from app.search import search_documents
 from app.settings import ARTIFACTS_ROOT, SUPPORTED_EXTENSIONS, TASKS_ROOT
 from app.workflow import (
@@ -20,6 +21,9 @@ from app.workflow import (
     analyze_task,
     build_context_pack,
     create_draft,
+    load_pipeline_status,
+    run_pipeline,
+    start_pipeline_run,
     refine_draft,
     run_gap_analysis,
     sanitize_task_id,
@@ -28,7 +32,7 @@ from app.workflow import (
 app = FastAPI(title="Analytics RAG Service", version="0.3.0")
 
 UI_HTML_PATH = Path(__file__).resolve().parent / "static" / "ui.html"
-ARTIFACT_KINDS = ("drafts", "reviews", "context_packs")
+ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs")
 PREVIEW_CHAR_LIMIT = 12000
 
 DEFAULT_TASK_TEMPLATE = """# Задача
@@ -80,6 +84,29 @@ class RefineRequest(TaskRequest):
     draft_path: str | None = None
     instructions: str | None = None
     model: str | None = None
+    target_sections: list[str] | None = None
+
+
+class RunPipelineRequest(TaskRequest):
+    run_gaps: bool = True
+    run_refine: bool = False
+    force_document_type: str | None = None
+    sections: list[str] | None = None
+    refine_instructions: str | None = None
+    run_target_sections: list[str] | None = None
+    draft_model: str | None = None
+    gap_model: str | None = None
+    refine_model: str | None = None
+    async_mode: bool = True
+
+
+class ContainerControlRequest(BaseModel):
+    services: list[str] | None = None
+
+
+class ModelsPullRequest(BaseModel):
+    models: list[str] | None = None
+    force: bool = False
 
 
 def iso_from_timestamp(timestamp: float) -> str:
@@ -336,6 +363,75 @@ def ui_artifact_file(kind: str, task_id: str, filename: str):
     )
 
 
+@app.get("/ui/ops/status")
+def ui_operations_status() -> dict:
+    """
+    Return stack/container/model operational status for UI.
+    """
+    return {
+        "status": "ok",
+        "operations": get_operations_status(),
+    }
+
+
+@app.post("/ui/ops/containers/{action}")
+def ui_control_containers(
+    action: str,
+    request: ContainerControlRequest | None = Body(default=None),
+) -> dict:
+    """
+    Start/stop/restart selected containers through Docker API.
+    """
+    payload = request or ContainerControlRequest()
+
+    try:
+        result = control_containers(action, services=payload.services, default_stack=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Container operation failed: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "operation": result,
+    }
+
+
+@app.post("/ui/ops/models/pull")
+def ui_pull_models(request: ModelsPullRequest | None = Body(default=None)) -> dict:
+    """
+    Start background pull for required or selected models.
+    """
+    payload = request or ModelsPullRequest()
+
+    try:
+        result = start_models_pull(models=payload.models, force=payload.force)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Unable to start model pull: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **result,
+    }
+
+
+@app.get("/ui/ops/models/status")
+def ui_models_status() -> dict:
+    """
+    Return model inventory and background pull status.
+    """
+    operations = get_operations_status()
+    return {
+        "status": "ok",
+        "models": operations["models"],
+        "model_pull": operations["model_pull"],
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     """
@@ -431,6 +527,70 @@ def build_context_pack_endpoint(request: BuildContextPackRequest) -> dict:
     }
 
 
+@app.post("/run-pipeline")
+def run_pipeline_endpoint(request: RunPipelineRequest) -> dict:
+    """
+    Run full pipeline: analyze -> draft -> gap analysis -> optional refine.
+    """
+    if request.force_document_type and request.force_document_type not in {"ft", "nft"}:
+        raise HTTPException(
+            status_code=400,
+            detail="`force_document_type` должен быть `ft` или `nft`",
+        )
+
+    if request.async_mode:
+        return {
+            "status": "ok",
+            "pipeline": start_pipeline_run(
+                task_id=request.task_id,
+                run_gaps=request.run_gaps,
+                run_refine=request.run_refine,
+                force_document_type=request.force_document_type,
+                sections=request.sections,
+                refine_instructions=request.refine_instructions,
+                run_target_sections=request.run_target_sections,
+                draft_model=request.draft_model,
+                gap_model=request.gap_model,
+                refine_model=request.refine_model,
+            ),
+        }
+
+    try:
+        result = run_pipeline(
+            task_id=request.task_id,
+            run_gaps=request.run_gaps,
+            run_refine=request.run_refine,
+            force_document_type=request.force_document_type,
+            sections=request.sections,
+            refine_instructions=request.refine_instructions,
+            run_target_sections=request.run_target_sections,
+            draft_model=request.draft_model,
+            gap_model=request.gap_model,
+            refine_model=request.refine_model,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Pipeline failed: {exc}") from exc
+
+    return {"status": "ok", "pipeline": result}
+
+
+@app.get("/pipeline-status/{task_id}/{run_id}")
+def pipeline_status(task_id: str, run_id: str) -> dict:
+    """
+    Read pipeline run state for UI polling.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    try:
+        payload = load_pipeline_status(safe_task_id, run_id)
+        return {"status": "ok", "pipeline": payload}
+    except WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Cannot load pipeline status: {exc}") from exc
+
+
 @app.post("/draft")
 def draft_endpoint(request: DraftRequest) -> dict:
     """
@@ -487,6 +647,7 @@ def refine_endpoint(request: RefineRequest) -> dict:
             draft_path=request.draft_path,
             instructions=request.instructions,
             model=request.model,
+            target_sections=request.target_sections,
         )
     except WorkflowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -35,6 +35,14 @@ if [[ "${ui_status}" != "200" ]]; then
 fi
 echo "UI доступен (HTTP ${ui_status})"
 
+echo "Проверка Ops endpoints..."
+ops_status="$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8000/ui/ops/status || true)"
+if [[ "${ops_status}" != "200" ]]; then
+  echo "Ops status endpoint недоступен, HTTP статус: ${ops_status}"
+  exit 1
+fi
+echo "Ops status endpoint: OK (HTTP ${ops_status})"
+
 echo "Установленные модели Ollama:"
 ollama list || true
 

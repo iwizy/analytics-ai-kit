@@ -33,9 +33,12 @@ services:
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-analytics_context}
       OLLAMA_BASE_URL: http://ollama:11434
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      DRAFT_MODEL: ${DRAFT_MODEL:-qwen3:14b}
+      DRAFT_MODEL: ${DRAFT_MODEL:-qwen3-coder:14b}
       REVIEW_MODEL: ${REVIEW_MODEL:-qwen2.5:7b}
-      REFINE_MODEL: ${REFINE_MODEL:-qwen3:14b}
+      REFINE_MODEL: ${REFINE_MODEL:-qwen3-coder:14b}
+      PIPELINE_DRAFT_MODEL: ${PIPELINE_DRAFT_MODEL:-qwen3-coder:14b}
+      PIPELINE_GAP_MODEL: ${PIPELINE_GAP_MODEL:-qwen2.5:7b}
+      PIPELINE_REFINE_MODEL: ${PIPELINE_REFINE_MODEL:-qwen3-coder:14b}
       DOCS_ROOT: /data/docs
       TASKS_ROOT: /data/tasks
       ARTIFACTS_ROOT: /data/artifacts
@@ -43,7 +46,12 @@ services:
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
       SEARCH_LIMIT: ${SEARCH_LIMIT:-8}
       CONTEXT_PACK_LIMIT: ${CONTEXT_PACK_LIMIT:-12}
+      PIPELINE_SECTION_WORKERS: ${PIPELINE_SECTION_WORKERS:-4}
+      PIPELINE_STAGE_TIMEOUT_SEC: ${PIPELINE_STAGE_TIMEOUT_SEC:-240}
+      PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-1}
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
     volumes:
       - ./docs:/data/docs
       - ./tasks:/data/tasks
       - ./artifacts:/data/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
