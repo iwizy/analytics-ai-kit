@@ -78,9 +78,9 @@ docker compose up -d --build
 
 ```yaml
 models:
-  - name: qwen3-coder-14b
+  - name: qwen2.5-coder-14b
     provider: ollama
-    model: qwen3-coder:14b
+    model: qwen2.5-coder:14b
     apiBase: http://127.0.0.1:11434
   - name: qwen2.5-7b
     provider: ollama

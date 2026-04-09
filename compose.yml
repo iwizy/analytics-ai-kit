@@ -33,12 +33,12 @@ services:
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-analytics_context}
       OLLAMA_BASE_URL: http://ollama:11434
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      DRAFT_MODEL: ${DRAFT_MODEL:-qwen3-coder:14b}
+      DRAFT_MODEL: ${DRAFT_MODEL:-qwen2.5-coder:14b}
       REVIEW_MODEL: ${REVIEW_MODEL:-qwen2.5:7b}
-      REFINE_MODEL: ${REFINE_MODEL:-qwen3-coder:14b}
-      PIPELINE_DRAFT_MODEL: ${PIPELINE_DRAFT_MODEL:-qwen3-coder:14b}
+      REFINE_MODEL: ${REFINE_MODEL:-qwen2.5-coder:14b}
+      PIPELINE_DRAFT_MODEL: ${PIPELINE_DRAFT_MODEL:-qwen2.5-coder:14b}
       PIPELINE_GAP_MODEL: ${PIPELINE_GAP_MODEL:-qwen2.5:7b}
-      PIPELINE_REFINE_MODEL: ${PIPELINE_REFINE_MODEL:-qwen3-coder:14b}
+      PIPELINE_REFINE_MODEL: ${PIPELINE_REFINE_MODEL:-qwen2.5-coder:14b}
       DOCS_ROOT: /data/docs
       TASKS_ROOT: /data/tasks
       ARTIFACTS_ROOT: /data/artifacts
@@ -66,7 +66,7 @@ services:
     depends_on:
       - rag-service
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3001}:8000"
     environment:
       UMI_APP_API_BASE_URL: http://localhost:8000
     volumes:

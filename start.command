@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
+FRONTEND_PORT="${FRONTEND_PORT:-3001}"
 
 compose_files=(-f compose.yml)
 if [[ "$(uname -s)" == "Darwin" && -f compose.macos.yml ]]; then
@@ -16,7 +17,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 echo "Поднимаю стек проекта..."
-docker compose "${compose_files[@]}" up -d --build
+docker compose "${compose_files[@]}" up -d --build --remove-orphans
 
 echo "Жду готовности backend..."
 for _ in {1..120}; do
@@ -28,14 +29,14 @@ done
 
 echo "Жду готовности frontend..."
 for _ in {1..120}; do
-  if curl -fsS http://localhost:3000 >/dev/null 2>&1; then
+  if curl -fsS "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
 if command -v open >/dev/null 2>&1; then
-  open http://localhost:3000
+  open "http://localhost:${FRONTEND_PORT}"
 fi
 
-echo "Готово. Интерфейс: http://localhost:3000"
+echo "Готово. Интерфейс: http://localhost:${FRONTEND_PORT}"
