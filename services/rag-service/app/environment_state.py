@@ -18,6 +18,11 @@ _MODEL_RECOMMENDATIONS = [
         "description": "Для ноутбуков с ограниченной памятью. Быстрее отвечает, но глубина проработки и качество формулировок могут быть проще.",
         "continue_model": "qwen2.5:7b",
         "pipeline_hint": "Если машина начинает шуметь или упирается в память, начни с облегченной модели в Continue и только потом повышай качество.",
+        "required_models": ["nomic-embed-text", "qwen2.5:7b"],
+        "deferred_models": ["qwen2.5-coder:14b", "qwen3-coder:30b"],
+        "draft_model": "qwen2.5:7b",
+        "review_model": "qwen2.5:7b",
+        "refine_model": "qwen2.5:7b",
     },
     {
         "key": "standard",
@@ -25,6 +30,11 @@ _MODEL_RECOMMENDATIONS = [
         "description": "Компромисс между скоростью и качеством. Подходит для большинства рабочих ноутбуков и повседневной аналитики.",
         "continue_model": "qwen2.5-coder:14b",
         "pipeline_hint": "Хороший безопасный вариант, если не хочется перегружать машину, но нужен более собранный текст.",
+        "required_models": ["nomic-embed-text", "qwen2.5:7b", "qwen2.5-coder:14b"],
+        "deferred_models": ["qwen3-coder:30b"],
+        "draft_model": "qwen2.5-coder:14b",
+        "review_model": "qwen2.5:7b",
+        "refine_model": "qwen2.5-coder:14b",
     },
     {
         "key": "powerful",
@@ -32,6 +42,11 @@ _MODEL_RECOMMENDATIONS = [
         "description": "Для мощных Mac и рабочих станций. Можно смело использовать qwen3-coder:30b для черновиков и разговорного режима в Continue.",
         "continue_model": "qwen3-coder:30b",
         "pipeline_hint": "Рекомендуемый вариант для твоего сценария, если машина тянет heavy-модель без заметных тормозов.",
+        "required_models": ["nomic-embed-text", "qwen2.5:7b", "qwen3-coder:30b"],
+        "deferred_models": ["qwen2.5-coder:14b"],
+        "draft_model": "qwen3-coder:30b",
+        "review_model": "qwen2.5:7b",
+        "refine_model": "qwen3-coder:30b",
     },
 ]
 
@@ -86,9 +101,63 @@ def recommended_model_profiles() -> list[dict[str, str]]:
     return list(_MODEL_RECOMMENDATIONS)
 
 
+def _model_variants(name: str) -> set[str]:
+    normalized = name.strip()
+    if ":" in normalized:
+        return {normalized}
+    return {normalized, f"{normalized}:latest"}
+
+
+def _is_model_available(required_model: str, installed_set: set[str]) -> bool:
+    return any(variant in installed_set for variant in _model_variants(required_model))
+
+
+def get_model_profile(profile_key: str | None) -> dict[str, Any]:
+    selected_key = (profile_key or "powerful").strip().lower()
+    for profile in _MODEL_RECOMMENDATIONS:
+        if profile["key"] == selected_key:
+            return dict(profile)
+    return dict(_MODEL_RECOMMENDATIONS[-1])
+
+
+def build_model_plan(*, profile_key: str | None, installed_models: list[str] | None) -> dict[str, Any]:
+    profile = get_model_profile(profile_key)
+    installed = list(installed_models or [])
+    installed_set = set(installed)
+    required_models = list(profile.get("required_models") or [])
+    ready_models = [model for model in required_models if _is_model_available(model, installed_set)]
+    missing_models = [model for model in required_models if not _is_model_available(model, installed_set)]
+    deferred_models = list(profile.get("deferred_models") or [])
+    return {
+        "profile_key": profile["key"],
+        "required_models": required_models,
+        "ready_models": ready_models,
+        "missing_models": missing_models,
+        "deferred_models": deferred_models,
+        "download_models": missing_models,
+        "draft_model": profile["draft_model"],
+        "review_model": profile["review_model"],
+        "refine_model": profile["refine_model"],
+        "continue_model": profile["continue_model"],
+    }
+
+
+def get_runtime_model_bundle(profile_key: str | None = None) -> dict[str, str]:
+    profile = get_model_profile(profile_key or load_environment_settings().get("model_profile"))
+    return {
+        "draft_model": str(profile["draft_model"]),
+        "review_model": str(profile["review_model"]),
+        "refine_model": str(profile["refine_model"]),
+    }
+
+
 def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
     settings = load_environment_settings()
-    missing_models = list(models.get("missing") or [])
+    installed_models = list(models.get("installed") or [])
+    model_plan = build_model_plan(
+        profile_key=str(settings.get("model_profile") or "powerful"),
+        installed_models=installed_models,
+    )
     confluence_ready = bool(
         settings.get("confluence_base_url")
         and settings.get("confluence_login")
@@ -96,7 +165,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
     )
     vscode_ready = bool(settings.get("vscode_ready"))
     continue_ready = bool(settings.get("continue_ready"))
-    models_ready = not missing_models
+    models_ready = not model_plan["missing_models"]
 
     missing_items: list[str] = []
     if not confluence_ready:
@@ -106,7 +175,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
     if not continue_ready:
         missing_items.append("Отметить готовность Continue")
     if not models_ready:
-        missing_items.append("Скачать обязательные модели")
+        missing_items.append("Скачать модели для выбранного профиля")
 
     readiness = {
         "confluence_ready": confluence_ready,
@@ -119,6 +188,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "settings": settings,
+        "model_plan": model_plan,
         "readiness": readiness,
         "recommended_profiles": recommended_model_profiles(),
         "commands": {

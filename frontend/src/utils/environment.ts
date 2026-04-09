@@ -8,6 +8,18 @@ export type EnvironmentSnapshot = {
     model_profile: string;
     templates_mode?: string;
   };
+  model_plan: {
+    profile_key: string;
+    required_models: string[];
+    ready_models: string[];
+    missing_models: string[];
+    deferred_models: string[];
+    download_models: string[];
+    draft_model: string;
+    review_model: string;
+    refine_model: string;
+    continue_model: string;
+  };
   readiness: {
     confluence_ready: boolean;
     vscode_ready: boolean;
@@ -23,6 +35,11 @@ export type EnvironmentSnapshot = {
     description: string;
     continue_model: string;
     pipeline_hint: string;
+    required_models: string[];
+    deferred_models: string[];
+    draft_model: string;
+    review_model: string;
+    refine_model: string;
   }>;
   commands: {
     start: string;

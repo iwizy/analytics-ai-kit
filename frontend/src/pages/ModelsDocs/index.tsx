@@ -44,10 +44,9 @@ type OperationsPayload = {
   };
 };
 
-function renderModelStatus(model: string, operations: OperationsPayload | null) {
-  const ready = new Set(operations?.models?.ready_required || []);
+function renderModelStatus(model: string, operations: OperationsPayload | null, readyModels: Set<string>) {
   const modelPull = operations?.model_pull?.models?.[model];
-  if (ready.has(model)) {
+  if (readyModels.has(model)) {
     return <Tag color="success">Готово</Tag>;
   }
   if (modelPull?.status === 'failed') {
@@ -77,7 +76,10 @@ export default function ModelsDocsPage() {
     void refreshAll();
   }, []);
 
-  const missingModels = useMemo(() => operations?.models?.missing || [], [operations]);
+  const activeModels = useMemo(() => environment?.model_plan.required_models || [], [environment]);
+  const deferredModels = useMemo(() => environment?.model_plan.deferred_models || [], [environment]);
+  const missingModels = useMemo(() => environment?.model_plan.missing_models || [], [environment]);
+  const readyModels = useMemo(() => new Set(environment?.model_plan.ready_models || []), [environment]);
 
   async function controlContainers(action: 'start' | 'restart' | 'stop') {
     setBusyAction(action);
@@ -100,7 +102,7 @@ export default function ModelsDocsPage() {
     try {
       await apiRequest('/ui/ops/models/pull', {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ models: missingModels }),
       });
       message.success('Загрузка моделей запущена');
       await refreshAll();
@@ -166,10 +168,10 @@ export default function ModelsDocsPage() {
             </Space>
           }>
             <Typography.Paragraph>
-              Обязательные модели проверяются автоматически. Пока хотя бы одна из них не готова, пункт «Подготовка статьи» останется заблокированным, а в меню у «Модели и контекст» будет красный индикатор.
+              Для текущего профиля производительности обязательными считаются только его модели. При нажатии кнопки будут скачиваться только они, а остальные останутся как «понадобятся позже при смене профиля».
             </Typography.Paragraph>
             <List
-              dataSource={operations?.models?.required || []}
+              dataSource={activeModels}
               renderItem={(model) => {
                 const pullState = operations?.model_pull?.models?.[model];
                 const progress = pullState?.total ? `${pullState.completed || 0}/${pullState.total}` : null;
@@ -178,10 +180,10 @@ export default function ModelsDocsPage() {
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Space style={{ justifyContent: 'space-between', width: '100%' }}>
                         <Typography.Text strong>{model}</Typography.Text>
-                        {renderModelStatus(model, operations)}
+                        {renderModelStatus(model, operations, readyModels)}
                       </Space>
                       <Typography.Text type="secondary">
-                        {pullState?.error || pullState?.message || (missingModels.includes(model) ? 'Модель ещё не скачана' : 'Модель готова к работе')}
+                        {pullState?.error || pullState?.message || (missingModels.includes(model) ? 'Модель ещё не скачана для текущего профиля' : readyModels.has(model) ? 'Модель готова к работе' : 'Статус обновляется')}
                       </Typography.Text>
                       {progress ? <Typography.Text type="secondary">Прогресс: {progress}</Typography.Text> : null}
                     </Space>
@@ -189,6 +191,18 @@ export default function ModelsDocsPage() {
                 );
               }}
             />
+            <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 4 }}>
+              Модели для текущего pipeline: draft — {environment?.model_plan.draft_model || '—'}, gaps — {environment?.model_plan.review_model || '—'}, refine — {environment?.model_plan.refine_model || '—'}.
+            </Typography.Paragraph>
+            {deferredModels.length ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="Эти модели пока не обязательны"
+                description={`При смене профиля позже могут понадобиться: ${deferredModels.join(', ')}.`}
+              />
+            ) : null}
           </ProCard>
         </ProCard>
 

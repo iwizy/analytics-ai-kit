@@ -12,6 +12,7 @@ SERVICE_STORAGE_ROOT = Path(os.getenv("SERVICE_STORAGE_ROOT") or "/data/storage"
 DOCKER_SOCKET_PATH = Path(os.getenv("DOCKER_SOCKET_PATH") or "/var/run/docker.sock")
 ANALYST_PROFILES_ROOT = SERVICE_STORAGE_ROOT / "analyst_profiles"
 PLAYWRIGHT_STATE_ROOT = SERVICE_STORAGE_ROOT / "playwright"
+ENVIRONMENT_SETTINGS_PATH = SERVICE_STORAGE_ROOT / "environment_settings.json"
 
 QDRANT_URL = os.getenv("QDRANT_URL") or "http://localhost:6333"
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or "analytics_context"
@@ -28,8 +29,8 @@ PIPELINE_REFINE_MODEL = os.getenv("PIPELINE_REFINE_MODEL") or REFINE_MODEL
 REQUIRED_MODELS = (
     "nomic-embed-text",
     "qwen2.5:7b",
+    "qwen2.5-coder:14b",
     "qwen3-coder:30b",
-    "gpt-oss:20b",
 )
 
 SEARCH_LIMIT = int(os.getenv("SEARCH_LIMIT") or "8")

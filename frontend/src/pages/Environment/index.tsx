@@ -127,10 +127,10 @@ export default function EnvironmentPage() {
                 <Checkbox>Continue настроен и готов общаться с локальными моделями</Checkbox>
               </Form.Item>
 
-                      <Typography.Title level={5}>3. Рекомендация по модели</Typography.Title>
-                      <Typography.Paragraph type="secondary">
-                        Эта настройка пока больше про подсказку для аналитика и Continue. Для мощного Mac оставляем тяжёлый профиль, для более слабых машин можно выбрать вариант полегче.
-                      </Typography.Paragraph>
+              <Typography.Title level={5}>3. Рекомендация по модели</Typography.Title>
+              <Typography.Paragraph type="secondary">
+                Этот выбор влияет не только на подсказки, но и на то, какие модели будут считаться обязательными. При загрузке в разделе «Модели и контекст» будут скачиваться только модели выбранного профиля.
+              </Typography.Paragraph>
               <Form.Item label="Профиль производительности" name="model_profile">
                 <Radio.Group optionType="button" buttonStyle="solid">
                   <Radio.Button value="light">Лёгкий</Radio.Button>
@@ -182,15 +182,21 @@ export default function EnvironmentPage() {
                 )}
               />
 
-              {selectedProfile ? (
-                <ProCard type="inner" title={selectedProfile.title}>
-                  <Typography.Paragraph>{selectedProfile.description}</Typography.Paragraph>
-                  <Tag color="blue" icon={<ToolOutlined />}>Continue: {selectedProfile.continue_model}</Tag>
-                  <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-                    {selectedProfile.pipeline_hint}
-                  </Typography.Paragraph>
-                </ProCard>
-              ) : null}
+                      {selectedProfile ? (
+                        <ProCard type="inner" title={selectedProfile.title}>
+                          <Typography.Paragraph>{selectedProfile.description}</Typography.Paragraph>
+                          <Tag color="blue" icon={<ToolOutlined />}>Continue: {selectedProfile.continue_model}</Tag>
+                          <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 4 }}>
+                            Будут скачиваться сейчас: {(selectedProfile.required_models || []).join(', ')}
+                          </Typography.Paragraph>
+                          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                            Позже при переключении профиля: {(selectedProfile.deferred_models || []).join(', ') || 'дополнительных моделей нет'}
+                          </Typography.Paragraph>
+                          <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                            {selectedProfile.pipeline_hint}
+                          </Typography.Paragraph>
+                        </ProCard>
+                      ) : null}
             </Space>
           </ProCard>
         </ProCard>

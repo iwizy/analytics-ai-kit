@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.chunking import chunk_text
 from app.documents import collect_supported_files, extract_text
+from app.environment_state import get_runtime_model_bundle
 from app.llm import generate_text, load_text_file, render_template
 from app.search import search_documents
 from app.settings import (
@@ -1376,7 +1377,8 @@ def create_draft(
     _, task_path, _ = resolve_task_paths(safe_task_id)
     task_text = task_path.read_text(encoding="utf-8", errors="ignore")
 
-    generation_model = model or PIPELINE_DRAFT_MODEL or DRAFT_MODEL
+    profile_models = get_runtime_model_bundle()
+    generation_model = model or profile_models["draft_model"] or PIPELINE_DRAFT_MODEL or DRAFT_MODEL
     section_bodies: dict[str, str] = {}
     context_pack_paths: dict[str, str] = {}
     section_timings: dict[str, float] = {}
@@ -1500,7 +1502,8 @@ def run_gap_analysis(
         },
     )
 
-    review_model = model or PIPELINE_GAP_MODEL or REVIEW_MODEL
+    profile_models = get_runtime_model_bundle()
+    review_model = model or profile_models["review_model"] or PIPELINE_GAP_MODEL or REVIEW_MODEL
     gaps_markdown = generate_text(
         model=review_model,
         prompt=prompt,
@@ -1584,7 +1587,8 @@ def refine_draft(
 
     existing_sections = split_markdown_sections(draft_text)
     refine_prompt_template = load_text_file(DOCS_ROOT / "templates" / "prompts" / "refine.md")
-    refine_model = model or PIPELINE_REFINE_MODEL or REFINE_MODEL
+    profile_models = get_runtime_model_bundle()
+    refine_model = model or profile_models["refine_model"] or PIPELINE_REFINE_MODEL or REFINE_MODEL
     refine_notes = (instructions or "Уточни формулировки, добавь проверяемость и убери неоднозначности.").strip()
 
     refined_bodies: dict[str, str] = {}
@@ -1719,11 +1723,12 @@ def run_pipeline(
 
         stage_started = datetime.now(timezone.utc)
         update_pipeline_stage(safe_task_id, run_identifier, "draft", state="running")
+        profile_models = get_runtime_model_bundle()
         draft_result = create_draft(
             task_id=safe_task_id,
             force_document_type=resolved_document_type,
             sections=target_sections,
-            model=draft_model or PIPELINE_DRAFT_MODEL or DRAFT_MODEL,
+            model=draft_model or profile_models["draft_model"] or PIPELINE_DRAFT_MODEL or DRAFT_MODEL,
             analysis=analysis,
             generate_handoff=False,
         )
@@ -1744,7 +1749,7 @@ def run_pipeline(
             update_pipeline_stage(safe_task_id, run_identifier, "gaps", state="running")
             gaps = run_gap_analysis(
                 task_id=safe_task_id,
-                model=gap_model or PIPELINE_GAP_MODEL or REVIEW_MODEL,
+                model=gap_model or profile_models["review_model"] or PIPELINE_GAP_MODEL or REVIEW_MODEL,
                 draft_path=draft_result["draft_path"],
                 generate_handoff=False,
             )
@@ -1773,7 +1778,7 @@ def run_pipeline(
                 task_id=safe_task_id,
                 draft_path=draft_result["draft_path"],
                 instructions=refine_instructions,
-                model=refine_model or PIPELINE_REFINE_MODEL or REFINE_MODEL,
+                model=refine_model or profile_models["refine_model"] or PIPELINE_REFINE_MODEL or REFINE_MODEL,
                 target_sections=run_target_sections or None,
                 analysis=analysis,
                 generate_handoff=False,
