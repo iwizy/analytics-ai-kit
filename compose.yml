@@ -57,3 +57,18 @@ services:
       - ./artifacts:/data/artifacts
       - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: analytics-frontend
+    restart: unless-stopped
+    depends_on:
+      - rag-service
+    ports:
+      - "3000:3000"
+    environment:
+      UMI_APP_API_BASE_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules

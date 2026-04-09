@@ -135,6 +135,10 @@ SECTION_ROUTING: dict[str, RoutingRule] = {
 }
 
 _PIPELINE_LOCK = threading.RLock()
+PIPELINE_STAGE_NAMES = ["analyze", "draft", "gaps", "refine", "finalize"]
+INTERRUPTED_PIPELINE_MESSAGE = (
+    "Пайплайн был прерван перезапуском сервиса. Запустите его повторно."
+)
 
 
 @dataclass
@@ -151,9 +155,6 @@ class PipelineRun:
     stages: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
-
-
-_PIPELINE_RUNS: dict[str, PipelineRun] = {}
 
 TASK_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
 TOKEN_PATTERN = re.compile(r"[a-zA-Zа-яА-Я0-9_]{3,}")
@@ -361,8 +362,22 @@ def pipeline_status_path(task_id: str, run_id_value: str) -> Path:
 
 def init_pipeline_status(task_id: str, run_id_value: str, *, stage_names: list[str]) -> PipelineRun:
     """
-    Initialize in-memory and on-disk pipeline status.
+    Initialize on-disk pipeline status.
     """
+    existing_path = pipeline_status_path(task_id, run_id_value)
+    if existing_path.exists():
+        payload = json.loads(existing_path.read_text(encoding="utf-8"))
+        return PipelineRun(
+            task_id=str(payload.get("task_id") or task_id),
+            run_id=str(payload.get("run_id") or run_id_value),
+            state=str(payload.get("state") or "running"),
+            started_at=str(payload.get("started_at") or utc_iso()),
+            finished_at=payload.get("finished_at"),
+            stages=list(payload.get("stages") or []),
+            result=dict(payload.get("result") or {}),
+            errors=list(payload.get("errors") or []),
+        )
+
     status = PipelineRun(
         task_id=task_id,
         run_id=run_id_value,
@@ -381,8 +396,6 @@ def init_pipeline_status(task_id: str, run_id_value: str, *, stage_names: list[s
         result={},
         errors=[],
     )
-    with _PIPELINE_LOCK:
-        _PIPELINE_RUNS[run_id_value] = status
     write_pipeline_status(task_id, run_id_value, status)
     return status
 
@@ -407,6 +420,27 @@ def write_pipeline_status(task_id: str, run_id_value: str, status: PipelineRun) 
     )
 
 
+def read_pipeline_status_record(task_id: str, run_id_value: str) -> PipelineRun:
+    """
+    Read pipeline status from disk and convert it to dataclass form.
+    """
+    path = pipeline_status_path(task_id, run_id_value)
+    if not path.exists():
+        raise WorkflowError(f"Запись о пайплайне не найдена: {run_id_value}")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return PipelineRun(
+        task_id=str(payload.get("task_id") or task_id),
+        run_id=str(payload.get("run_id") or run_id_value),
+        state=str(payload.get("state") or "running"),
+        started_at=str(payload.get("started_at") or utc_iso()),
+        finished_at=payload.get("finished_at"),
+        stages=list(payload.get("stages") or []),
+        result=dict(payload.get("result") or {}),
+        errors=list(payload.get("errors") or []),
+    )
+
+
 def update_pipeline_stage(
     task_id: str,
     run_id_value: str,
@@ -420,8 +454,9 @@ def update_pipeline_stage(
     Update one pipeline stage and persist status.
     """
     with _PIPELINE_LOCK:
-        run = _PIPELINE_RUNS.get(run_id_value)
-        if run is None:
+        try:
+            run = read_pipeline_status_record(task_id, run_id_value)
+        except WorkflowError:
             return
 
         for stage in run.stages or []:
@@ -447,8 +482,9 @@ def complete_pipeline_status(task_id: str, run_id_value: str, *, state: str, res
     Finish pipeline and persist final status.
     """
     with _PIPELINE_LOCK:
-        run = _PIPELINE_RUNS.get(run_id_value)
-        if run is None:
+        try:
+            run = read_pipeline_status_record(task_id, run_id_value)
+        except WorkflowError:
             return
         run.state = state
         run.finished_at = utc_iso()
@@ -465,6 +501,55 @@ def load_pipeline_status(task_id: str, run_id_value: str) -> dict[str, Any]:
         raise WorkflowError(f"Запись о пайплайне не найдена: {run_id_value}")
 
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def recover_interrupted_pipeline_runs() -> int:
+    """
+    Mark stale in-progress pipeline runs as interrupted after service restart.
+    """
+    pipeline_root = ARTIFACTS_ROOT / "pipeline_runs"
+    if not pipeline_root.exists():
+        return 0
+
+    recovered = 0
+    for path in pipeline_root.rglob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if payload.get("state") != "running":
+            continue
+
+        finished_at = utc_iso()
+        payload["state"] = "interrupted"
+        payload["finished_at"] = finished_at
+
+        errors = list(payload.get("errors") or [])
+        if INTERRUPTED_PIPELINE_MESSAGE not in errors:
+            errors.append(INTERRUPTED_PIPELINE_MESSAGE)
+        payload["errors"] = errors
+
+        for stage in payload.get("stages") or []:
+            stage_state = stage.get("state")
+            if stage_state == "running":
+                stage["state"] = "interrupted"
+                stage["finished_at"] = finished_at
+                stage["error"] = INTERRUPTED_PIPELINE_MESSAGE
+            elif stage_state == "pending":
+                stage["state"] = "skipped"
+                stage["finished_at"] = finished_at
+                stage.setdefault("details", {"reason": "service_restarted"})
+
+        result = dict(payload.get("result") or {})
+        result["status"] = "interrupted"
+        result["error"] = INTERRUPTED_PIPELINE_MESSAGE
+        payload["result"] = result
+
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        recovered += 1
+
+    return recovered
 
 
 def to_relative_label(path: Path, root: Path) -> str:
@@ -804,6 +889,203 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def latest_artifact_path(task_id: str, kind: str, pattern: str = "*") -> Path | None:
+    """
+    Return latest artifact file for task and kind.
+    """
+    artifact_dir = ARTIFACTS_ROOT / kind / task_id
+    if not artifact_dir.exists():
+        return None
+
+    candidates = [path for path in artifact_dir.glob(pattern) if path.is_file()]
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def build_continue_working_copy(
+    *,
+    task_id: str,
+    source_draft_path: Path | None,
+    document_type: str,
+) -> Path | None:
+    """
+    Create analyst-editable draft copy for Continue sessions.
+    """
+    if source_draft_path is None or not source_draft_path.exists():
+        return None
+
+    drafts_dir = ensure_artifacts_dir("drafts", task_id)
+    working_copy_path = drafts_dir / f"{utc_timestamp()}_continue_workspace_{document_type}.md"
+    working_copy_path.write_text(
+        source_draft_path.read_text(encoding="utf-8", errors="ignore"),
+        encoding="utf-8",
+    )
+    return working_copy_path
+
+
+def render_continue_handoff(
+    *,
+    task_id: str,
+    analysis: dict[str, Any],
+    task_path: Path,
+    attachment_labels: list[str],
+    confluence_labels: list[str],
+    latest_draft_path: Path | None,
+    latest_gaps_path: Path | None,
+    latest_context_pack_path: Path | None,
+    latest_pipeline_path: Path | None,
+    working_copy_path: Path | None,
+    notes: str | None,
+) -> str:
+    """
+    Render markdown handoff for VS Code + Continue workflow.
+    """
+    sections = analysis.get("sections") or []
+    document_type = analysis.get("document_type") or "unknown"
+    service = analysis.get("service") or "not detected"
+
+    lines = [
+        "# Continue handoff",
+        "",
+        f"Generated at: {utc_iso()}",
+        f"Task ID: {task_id}",
+        f"Task file: {task_path}",
+        f"Detected document type: {document_type}",
+        f"Detected service: {service}",
+        f"Sections: {', '.join(sections) if sections else '-'}",
+        "",
+        "## Ready files",
+        f"- Latest system draft: {latest_draft_path or '-'}",
+        f"- Continue working copy: {working_copy_path or '-'}",
+        f"- Latest gaps: {latest_gaps_path or '-'}",
+        f"- Latest context pack: {latest_context_pack_path or '-'}",
+        f"- Latest pipeline status: {latest_pipeline_path or '-'}",
+        "",
+        "## Source files",
+        f"- task.md: {task_path}",
+        f"- Attachments count: {len(attachment_labels)}",
+    ]
+
+    if attachment_labels:
+        lines.extend([f"- attachment: {label}" for label in attachment_labels[:20]])
+
+    if confluence_labels:
+        lines.extend(["", "## Imported from Confluence"])
+        lines.extend([f"- {label}" for label in confluence_labels[:20]])
+
+    if notes:
+        lines.extend(["", "## Notes", notes.strip()])
+
+    lines.extend(
+        [
+            "",
+            "## Suggested Continue prompts",
+            (
+                f"1. Прочитай этот handoff и открой рабочую копию "
+                f"`{working_copy_path or latest_draft_path or task_path}`. "
+                "Продолжи доработку документа без вымышленных фактов."
+            ),
+            (
+                f"2. Сравни `{working_copy_path or latest_draft_path or task_path}` "
+                f"c `{latest_gaps_path or task_path}` и устрани критичные пробелы."
+            ),
+            (
+                "3. Если информации не хватает, сформулируй список открытых вопросов "
+                "для аналитика в конце документа."
+            ),
+            "",
+            "## Power mode workflow",
+            "- Открой workspace в VS Code с установленным Continue.",
+            "- Начни работу с этого handoff файла как точки входа.",
+            "- Редактируй только рабочую копию или создавай новую версию рядом, не перетирая системные артефакты.",
+        ]
+    )
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def prepare_continue_handoff(
+    *,
+    task_id: str,
+    analysis: dict[str, Any] | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """
+    Build handoff artifact and analyst-editable draft copy for Continue.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    resolved_analysis = analysis or analyze_task(safe_task_id)
+    _, task_path, attachments_dir = resolve_task_paths(safe_task_id)
+
+    attachment_files = collect_supported_files(attachments_dir)
+    attachment_labels = [to_relative_label(path, TASKS_ROOT) for path in attachment_files]
+    confluence_labels = [
+        to_relative_label(path, TASKS_ROOT)
+        for path in attachment_files
+        if path.name.startswith("confluence_")
+    ]
+
+    latest_draft_path = None
+    drafts_dir = ARTIFACTS_ROOT / "drafts" / safe_task_id
+    if drafts_dir.exists():
+        draft_candidates = [
+            path
+            for path in drafts_dir.glob("*.md")
+            if path.is_file() and "_continue_workspace_" not in path.name
+        ]
+        draft_candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        if draft_candidates:
+            latest_draft_path = draft_candidates[0]
+
+    latest_gaps_path = latest_artifact_path(safe_task_id, "reviews", "*.md")
+    latest_context_pack_path = latest_artifact_path(safe_task_id, "context_packs", "*.json")
+    latest_pipeline_path = latest_artifact_path(safe_task_id, "pipeline_runs", "*.json")
+
+    document_type = resolved_analysis.get("document_type") or "ft"
+    if latest_draft_path and latest_draft_path.suffix.lower() == ".md":
+        draft_type = extract_draft_document_type(
+            latest_draft_path.read_text(encoding="utf-8", errors="ignore")
+        )
+        if draft_type:
+            document_type = draft_type
+
+    working_copy_path = build_continue_working_copy(
+        task_id=safe_task_id,
+        source_draft_path=latest_draft_path,
+        document_type=document_type,
+    )
+
+    handoff_dir = ensure_artifacts_dir("handoffs", safe_task_id)
+    handoff_path = handoff_dir / f"{utc_timestamp()}_handoff.md"
+    handoff_path.write_text(
+        render_continue_handoff(
+            task_id=safe_task_id,
+            analysis=resolved_analysis,
+            task_path=task_path,
+            attachment_labels=attachment_labels,
+            confluence_labels=confluence_labels,
+            latest_draft_path=latest_draft_path,
+            latest_gaps_path=latest_gaps_path,
+            latest_context_pack_path=latest_context_pack_path,
+            latest_pipeline_path=latest_pipeline_path,
+            working_copy_path=working_copy_path,
+            notes=notes,
+        ),
+        encoding="utf-8",
+    )
+
+    return {
+        "task_id": safe_task_id,
+        "handoff_path": str(handoff_path),
+        "working_copy_path": str(working_copy_path) if working_copy_path else None,
+        "latest_draft_path": str(latest_draft_path) if latest_draft_path else None,
+        "latest_gaps_path": str(latest_gaps_path) if latest_gaps_path else None,
+    }
+
+
 def build_context_pack(
     *,
     task_id: str,
@@ -1077,6 +1359,7 @@ def create_draft(
     sections: list[str] | None = None,
     model: str | None = None,
     analysis: dict[str, Any] | None = None,
+    generate_handoff: bool = True,
 ) -> dict[str, Any]:
     """
     Generate a section-based draft document for the task.
@@ -1147,7 +1430,7 @@ def create_draft(
     draft_path = drafts_dir / f"{utc_timestamp()}_draft_{document_type}.md"
     draft_path.write_text(draft_markdown, encoding="utf-8")
 
-    return {
+    result = {
         "task_id": safe_task_id,
         "document_type": document_type,
         "model": generation_model,
@@ -1158,6 +1441,13 @@ def create_draft(
         "section_timings": section_timings,
         "section_errors": generation_errors,
     }
+    if generate_handoff:
+        result["handoff"] = prepare_continue_handoff(
+            task_id=safe_task_id,
+            analysis=resolved_analysis,
+            notes="Черновик подготовлен. Дальше можно переходить в VS Code + Continue.",
+        )
+    return result
 
 
 def resolve_existing_draft(task_id: str, draft_path: str | None) -> Path:
@@ -1189,6 +1479,7 @@ def run_gap_analysis(
     task_id: str,
     draft_path: str | None = None,
     model: str | None = None,
+    generate_handoff: bool = True,
 ) -> dict[str, Any]:
     """
     Run gap analysis for a draft and save result into reviews artifacts.
@@ -1224,12 +1515,18 @@ def run_gap_analysis(
     gaps_path = reviews_dir / f"{utc_timestamp()}_gaps.md"
     gaps_path.write_text(gaps_markdown.strip() + "\n", encoding="utf-8")
 
-    return {
+    result = {
         "task_id": safe_task_id,
         "draft_path": str(resolved_draft_path),
         "gaps_path": str(gaps_path),
         "model": review_model,
     }
+    if generate_handoff:
+        result["handoff"] = prepare_continue_handoff(
+            task_id=safe_task_id,
+            notes="Gap analysis подготовлен. Сверьте рабочую копию документа с найденными пробелами.",
+        )
+    return result
 
 
 def split_markdown_sections(markdown: str) -> dict[str, str]:
@@ -1268,6 +1565,7 @@ def refine_draft(
     model: str | None = None,
     target_sections: list[str] | None = None,
     analysis: dict[str, Any] | None = None,
+    generate_handoff: bool = True,
 ) -> dict[str, Any]:
     """
     Refine existing draft section-by-section using refine prompt.
@@ -1347,7 +1645,7 @@ def refine_draft(
     refined_path = drafts_dir / f"{utc_timestamp()}_refined_{document_type}.md"
     refined_path.write_text(refined_markdown, encoding="utf-8")
 
-    return {
+    result = {
         "task_id": safe_task_id,
         "document_type": document_type,
         "refined_path": str(refined_path),
@@ -1356,6 +1654,13 @@ def refine_draft(
         "model": refine_model,
         "context_pack_paths": context_pack_paths,
     }
+    if generate_handoff:
+        result["handoff"] = prepare_continue_handoff(
+            task_id=safe_task_id,
+            analysis=resolved_analysis,
+            notes="Refine завершен. Продолжайте ручную доработку в рабочей копии через Continue.",
+        )
+    return result
 
 
 def run_pipeline(
@@ -1389,7 +1694,7 @@ def run_pipeline(
     init_pipeline_status(
         safe_task_id,
         run_identifier,
-        stage_names=["analyze", "draft", "gaps", "refine", "finalize"],
+        stage_names=PIPELINE_STAGE_NAMES,
     )
 
     timings: dict[str, float] = {}
@@ -1420,6 +1725,7 @@ def run_pipeline(
             sections=target_sections,
             model=draft_model or PIPELINE_DRAFT_MODEL or DRAFT_MODEL,
             analysis=analysis,
+            generate_handoff=False,
         )
         timings["draft_seconds"] = (datetime.now(timezone.utc) - stage_started).total_seconds()
         update_pipeline_stage(
@@ -1440,6 +1746,7 @@ def run_pipeline(
                 task_id=safe_task_id,
                 model=gap_model or PIPELINE_GAP_MODEL or REVIEW_MODEL,
                 draft_path=draft_result["draft_path"],
+                generate_handoff=False,
             )
             timings["gaps_seconds"] = (datetime.now(timezone.utc) - gap_started).total_seconds()
             update_pipeline_stage(
@@ -1469,6 +1776,7 @@ def run_pipeline(
                 model=refine_model or PIPELINE_REFINE_MODEL or REFINE_MODEL,
                 target_sections=run_target_sections or None,
                 analysis=analysis,
+                generate_handoff=False,
             )
             timings["refine_seconds"] = (datetime.now(timezone.utc) - refine_started).total_seconds()
             update_pipeline_stage(
@@ -1494,6 +1802,12 @@ def run_pipeline(
 
         result["status"] = "ok"
         result["timings"] = timings
+        result["handoff"] = prepare_continue_handoff(
+            task_id=safe_task_id,
+            analysis=analysis,
+            notes="Pipeline завершен. Рабочая копия и handoff готовы для Power mode в VS Code + Continue.",
+        )
+        result["artifacts"]["handoff"] = result["handoff"]["handoff_path"]
         update_pipeline_stage(safe_task_id, run_identifier, "finalize", state="done", details={"final_status": "ok"})
         complete_pipeline_status(safe_task_id, run_identifier, state="completed", result=result)
         return result
@@ -1530,6 +1844,11 @@ def start_pipeline_run(
     """
     run_identifier = run_id()
     safe_task_id = sanitize_task_id(task_id)
+    init_pipeline_status(
+        safe_task_id,
+        run_identifier,
+        stage_names=PIPELINE_STAGE_NAMES,
+    )
 
     def worker() -> None:
         run_pipeline(

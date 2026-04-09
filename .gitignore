@@ -39,9 +39,13 @@ tasks/inbox/*
 artifacts/drafts/*
 artifacts/reviews/*
 artifacts/context_packs/*
+artifacts/pipeline_runs/*
+artifacts/handoffs/*
 !artifacts/drafts/.gitkeep
 !artifacts/reviews/.gitkeep
 !artifacts/context_packs/.gitkeep
+!artifacts/pipeline_runs/.gitkeep
+!artifacts/handoffs/.gitkeep
 
 # =========================
 # PYTHON (rag-service)
@@ -99,6 +103,8 @@ temp/
 # NODE (если вдруг добавится фронт)
 # =========================
 node_modules/
+.umi/
+frontend/.umi/
 
 # =========================
 # BUILD ARTIFACTS

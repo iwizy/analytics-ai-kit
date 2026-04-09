@@ -4,11 +4,13 @@ Main application entrypoint for the local analytics RAG service.
 
 from __future__ import annotations
 
+import json
 import mimetypes
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -27,6 +29,8 @@ from app.workflow import (
     build_context_pack,
     create_draft,
     load_pipeline_status,
+    prepare_continue_handoff,
+    recover_interrupted_pipeline_runs,
     run_pipeline,
     start_pipeline_run,
     refine_draft,
@@ -35,9 +39,21 @@ from app.workflow import (
 )
 
 app = FastAPI(title="Analytics RAG Service", version="0.3.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 UI_HTML_PATH = Path(__file__).resolve().parent / "static" / "ui.html"
-ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs")
+ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs", "handoffs")
 PREVIEW_CHAR_LIMIT = 12000
 
 DEFAULT_TASK_TEMPLATE = """# Задача
@@ -125,6 +141,10 @@ class ConfluenceImportRequest(TaskRequest):
     urls: list[str] = Field(min_length=1)
 
 
+class HandoffRequest(TaskRequest):
+    notes: str | None = None
+
+
 def iso_from_timestamp(timestamp: float) -> str:
     """
     Convert unix timestamp to ISO string.
@@ -175,6 +195,18 @@ def preview_text(path: Path, max_chars: int = PREVIEW_CHAR_LIMIT) -> str:
     return f"{text[:max_chars]}\n\n...[truncated]"
 
 
+def read_json(path: Path) -> dict | None:
+    """
+    Read JSON file into dict when possible.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
 def validate_artifact_kind(kind: str) -> str:
     """
     Validate artifact kind.
@@ -193,6 +225,14 @@ def ui_page() -> str:
         raise HTTPException(status_code=500, detail="UI file is missing")
 
     return UI_HTML_PATH.read_text(encoding="utf-8")
+
+
+@app.on_event("startup")
+def startup_recover_pipeline_runs() -> None:
+    """
+    Mark in-progress pipeline runs as interrupted when service restarts.
+    """
+    recover_interrupted_pipeline_runs()
 
 
 @app.get("/ui/task-template")
@@ -372,6 +412,8 @@ def ui_state(task_id: str) -> dict:
 
     latest_draft_preview = ""
     latest_review_preview = ""
+    latest_handoff_preview = ""
+    latest_pipeline = None
 
     draft_files = list_regular_files(ARTIFACTS_ROOT / "drafts" / safe_task_id)
     if draft_files:
@@ -380,6 +422,14 @@ def ui_state(task_id: str) -> dict:
     review_files = list_regular_files(ARTIFACTS_ROOT / "reviews" / safe_task_id)
     if review_files:
         latest_review_preview = preview_text(review_files[0])
+
+    handoff_files = list_regular_files(ARTIFACTS_ROOT / "handoffs" / safe_task_id)
+    if handoff_files:
+        latest_handoff_preview = preview_text(handoff_files[0])
+
+    pipeline_files = list_regular_files(ARTIFACTS_ROOT / "pipeline_runs" / safe_task_id)
+    if pipeline_files:
+        latest_pipeline = read_json(pipeline_files[0])
 
     return {
         "status": "ok",
@@ -391,9 +441,11 @@ def ui_state(task_id: str) -> dict:
         "analysis": analysis,
         "analysis_error": analysis_error,
         "artifacts": artifacts,
+        "latest_pipeline": latest_pipeline,
         "latest": {
             "draft_preview": latest_draft_preview,
             "gaps_preview": latest_review_preview,
+            "handoff_preview": latest_handoff_preview,
         },
     }
 
@@ -588,6 +640,27 @@ def build_context_pack_endpoint(request: BuildContextPackRequest) -> dict:
     return {
         "status": "ok",
         "context_packs": packs,
+    }
+
+
+@app.post("/prepare-handoff")
+def prepare_handoff_endpoint(request: HandoffRequest) -> dict:
+    """
+    Create Continue handoff and working copy for a task.
+    """
+    try:
+        result = prepare_continue_handoff(
+            task_id=request.task_id,
+            notes=request.notes,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Не удалось подготовить handoff: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "handoff": result,
     }
 
 
