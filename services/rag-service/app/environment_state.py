@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.confluence import load_analyst_profile
+from app.confluence import ConfluenceImportError, load_analyst_profile
 from app.settings import SERVICE_STORAGE_ROOT
 
 DEFAULT_ANALYST_ID = "default"
@@ -60,7 +60,10 @@ def load_environment_settings() -> dict[str, Any]:
     _ENVIRONMENT_DIR.mkdir(parents=True, exist_ok=True)
     payload = _defaults()
     payload.update(_read_json(_ENVIRONMENT_FILE))
-    profile = load_analyst_profile(DEFAULT_ANALYST_ID)
+    try:
+        profile = load_analyst_profile(DEFAULT_ANALYST_ID)
+    except ConfluenceImportError:
+        profile = None
     payload["confluence_login"] = str(profile.get("login") or "") if profile else ""
     payload["has_confluence_password"] = bool(profile and profile.get("password"))
     return payload

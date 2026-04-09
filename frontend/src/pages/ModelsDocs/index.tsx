@@ -131,9 +131,7 @@ export default function ModelsDocsPage() {
               ? 'Красный индикатор в меню должен исчезнуть, и раздел статьи станет доступен.'
               : environment.readiness.missing_items.join(' | ')}
           />
-        ) : (
-          <Alert type="info" showIcon message="Сводка готовности загружается" />
-        )}
+        ) : null}
 
         <ProCard gutter={16} wrap>
           <ProCard colSpan={{ xs: 24, xl: 11 }} title="Сводка по готовности" bordered>
@@ -202,12 +200,21 @@ export default function ModelsDocsPage() {
               <Button danger loading={busyAction === 'stop'} onClick={() => void controlContainers('stop')}>Стоп</Button>
             </Space>
           }>
-            <Alert
-              type={operations?.docker?.available ? 'success' : 'error'}
-              showIcon
-              message={operations?.docker?.available ? 'Docker доступен' : 'Docker недоступен'}
-              description={operations?.docker?.error || 'Контейнеры и health-check статусы читаются прямо из локального стека.'}
-            />
+            {operations ? (
+              <Alert
+                type={operations.docker.available ? 'success' : 'error'}
+                showIcon
+                message={operations.docker.available ? 'Docker доступен' : 'Docker недоступен'}
+                description={operations.docker.error || 'Контейнеры и health-check статусы читаются прямо из локального стека.'}
+              />
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message="Проверяю Docker и контейнеры"
+                description="Секунду, дочитываю состояние локального стека."
+              />
+            )}
             <Table
               rowKey={(row: { name: string }) => row.name}
               style={{ marginTop: 16 }}

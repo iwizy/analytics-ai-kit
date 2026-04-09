@@ -43,18 +43,19 @@ export default function AppLayout() {
 
   const taskLocked = environment ? !environment.readiness.article_ready : false;
   const contextWarning = environment ? !environment.readiness.all_ready : false;
+  const wrappedMenuLabelStyle: React.CSSProperties = { whiteSpace: 'normal', lineHeight: 1.35 };
 
   const items = useMemo<MenuProps['items']>(() => [
     {
       key: '/environment',
       icon: <SettingOutlined />,
-      label: <Link to="/environment">Подготовка окружения</Link>,
+      label: <Link to="/environment"><span style={wrappedMenuLabelStyle}>Подготовка окружения</span></Link>,
     },
     {
       key: '/task',
       icon: <FileTextOutlined />,
       disabled: taskLocked,
-      label: taskLocked ? 'Подготовка статьи' : <Link to="/task">Подготовка статьи</Link>,
+      label: taskLocked ? <span style={wrappedMenuLabelStyle}>Подготовка статьи</span> : <Link to="/task"><span style={wrappedMenuLabelStyle}>Подготовка статьи</span></Link>,
     },
     {
       key: '/models-docs',
@@ -62,7 +63,7 @@ export default function AppLayout() {
       label: (
         <Link to="/models-docs">
           <Space size={8}>
-            <span>Модели и контекст</span>
+            <span style={wrappedMenuLabelStyle}>Модели и контекст</span>
             <Badge color={contextWarning ? '#ff4d4f' : '#52c41a'} />
           </Space>
         </Link>
@@ -78,14 +79,11 @@ export default function AppLayout() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={300} theme="light" style={{ borderRight: '1px solid #f0f0f0', paddingTop: 20 }}>
+      <Sider width={320} theme="light" style={{ borderRight: '1px solid #f0f0f0', paddingTop: 20 }}>
         <div style={{ padding: '0 20px 20px' }}>
           <Typography.Title level={4} style={{ marginBottom: 8 }}>
             Analytics AI Kit
           </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Слева теперь три понятных режима: сначала готовим окружение, потом статью, а техническое состояние держим отдельно в «Модели и контекст».
-          </Typography.Paragraph>
         </div>
         <Menu mode="inline" selectedKeys={[selectedKey]} items={items} style={{ borderInlineEnd: 'none' }} />
         <div style={{ padding: 20 }}>
@@ -99,13 +97,11 @@ export default function AppLayout() {
                   type="warning"
                   showIcon
                   message="Подготовка статьи пока недоступна"
-                  description="Сначала заполни настройки Confluence, отметь готовность VS Code и Continue и скачай обязательные модели."
+                  description="Сначала заполни базовые настройки, подтверди готовность VS Code и Continue и скачай обязательные модели."
                 />
               ) : null}
             </Space>
-          ) : (
-            <Alert type="info" showIcon message="Статус окружения загружается" />
-          )}
+          ) : null}
         </div>
       </Sider>
       <Layout>

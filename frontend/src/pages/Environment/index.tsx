@@ -76,7 +76,7 @@ export default function EnvironmentPage() {
   return (
     <PageContainer
       title="Подготовка окружения"
-      subTitle="Здесь мы один раз настраиваем доступы, локальные инструменты и модельный профиль. Пока этот шаг не завершён, подготовка статьи будет заблокирована."
+      subTitle="Здесь один раз настраиваются доступы, локальные инструменты и модельный профиль. Пока шаги ниже не готовы, раздел статьи останется недоступен."
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {snapshot ? (
@@ -88,9 +88,7 @@ export default function EnvironmentPage() {
               ? 'Теперь можно переходить в «Подготовка статьи» и собирать материалы.'
               : snapshot.readiness.missing_items.join(' | ')}
           />
-        ) : (
-          <Alert type="info" showIcon message="Загружаю настройки окружения" />
-        )}
+        ) : null}
 
         <ProCard gutter={16} wrap>
           <ProCard colSpan={{ xs: 24, xl: 15 }} title="1. Доступ к Confluence" bordered>
@@ -118,10 +116,10 @@ export default function EnvironmentPage() {
                 <Input.Password placeholder={snapshot?.settings.has_confluence_password ? 'Оставь пустым, чтобы сохранить текущий пароль' : 'Введите пароль'} />
               </Form.Item>
 
-              <Typography.Title level={5}>2. Подготовка VS Code и Continue</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                Эти отметки нужны, чтобы handoff из UI можно было сразу забрать в VS Code и дорабатывать уже в разговорном режиме через Continue.
-              </Typography.Paragraph>
+                      <Typography.Title level={5}>2. Подготовка VS Code и Continue</Typography.Title>
+                      <Typography.Paragraph type="secondary">
+                        Эти отметки нужны, чтобы handoff из UI можно было сразу забрать в VS Code и дорабатывать уже в разговорном режиме через Continue.
+                      </Typography.Paragraph>
               <Form.Item name="vscode_ready" valuePropName="checked">
                 <Checkbox>VS Code установлен, проект открывается локально и команда `code` доступна</Checkbox>
               </Form.Item>
@@ -129,10 +127,10 @@ export default function EnvironmentPage() {
                 <Checkbox>Continue настроен и готов общаться с локальными моделями</Checkbox>
               </Form.Item>
 
-              <Typography.Title level={5}>3. Рекомендация по модели</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                Эта настройка пока больше про подсказку для аналитика и Continue. Для мощного Mac оставляем тяжёлый профиль, для более слабых машин можно выбрать вариант полегче.
-              </Typography.Paragraph>
+                      <Typography.Title level={5}>3. Рекомендация по модели</Typography.Title>
+                      <Typography.Paragraph type="secondary">
+                        Эта настройка пока больше про подсказку для аналитика и Continue. Для мощного Mac оставляем тяжёлый профиль, для более слабых машин можно выбрать вариант полегче.
+                      </Typography.Paragraph>
               <Form.Item label="Профиль производительности" name="model_profile">
                 <Radio.Group optionType="button" buttonStyle="solid">
                   <Radio.Button value="light">Лёгкий</Radio.Button>
@@ -166,8 +164,8 @@ export default function EnvironmentPage() {
               <Alert
                 type="info"
                 showIcon
-                message="Шаблоны не даём обычному аналитику"
-                description="Подложить шаблон task.md можно из статьи, но редактирование самих шаблонов оставляем для power mode во VS Code. Это отдельный слой администрирования, а не часть обычного analyst flow."
+                message="Подсказка по роли этого экрана"
+                description="Здесь настраивается рабочее окружение аналитика. Шаблоны и служебные изменения остаются отдельным уровнем и не мешают обычному сценарию подготовки статьи."
               />
 
               <List
@@ -224,12 +222,23 @@ export default function EnvironmentPage() {
               description="UI собирает материалы и готовит handoff, а VS Code + Continue нужны для живой доработки результата в файлах проекта."
             />
 
+            <ProCard type="inner" title="0. Что подготовить на машине заранее">
+              <List
+                dataSource={[
+                  'Установи Docker Desktop и убедись, что локальные контейнеры проекта могут запускаться.',
+                  'Установи Ollama. Именно он будет держать локальные модели, которые используются в UI и в Continue.',
+                  'Затем открой раздел «Модели и контекст» и скачай недостающие модели. Для более слабой машины выбирай лёгкий или стандартный профиль, для мощного Mac можно оставлять тяжёлый.',
+                ]}
+                renderItem={(item) => <List.Item>{item}</List.Item>}
+              />
+            </ProCard>
+
             <ProCard type="inner" title="1. Подготовить VS Code">
               <List
                 dataSource={[
                   'Установи Visual Studio Code, если он ещё не установлен.',
-                  'Открой проект локально: `code /Users/iwizard/Dev/analytics-ai-kit` или просто запусти `./power-mode.command <task-id>` после подготовки handoff.',
-                  'Проверь, что команда `code` доступна в терминале. На macOS это обычно делается через Command Palette → `Shell Command: Install code command in PATH`.',
+                  'Открой папку проекта в VS Code обычным способом через интерфейс редактора или через команду `code`, если она настроена.',
+                  'Если `code` ещё не доступна в терминале, добавь её в PATH средствами своей операционной системы и самого VS Code.',
                   'После этого вернись сюда и отметь галочку, что VS Code готов.',
                 ]}
                 renderItem={(item) => <List.Item>{item}</List.Item>}
@@ -243,6 +252,7 @@ export default function EnvironmentPage() {
                   'Открой Continue и подключи локальный Ollama как провайдер моделей.',
                   'Если нужен адрес сервиса, используй `http://localhost:11434`.',
                   `Для текущего профиля машины рекомендуем модель Continue: ${selectedProfile?.continue_model || 'qwen3-coder:30b'}.`,
+                  'Если машина не тянет тяжёлую модель, вернись выше и переключи профиль на более лёгкий. Это повлияет на рекомендацию для Continue.',
                   'После настройки вернись сюда и отметь галочку, что Continue готов.',
                 ]}
                 renderItem={(item) => <List.Item>{item}</List.Item>}
@@ -254,7 +264,7 @@ export default function EnvironmentPage() {
                 dataSource={[
                   'Сначала собери задачу в UI: task.md, контекст, draft, gaps, refine.',
                   'Нажми `Prepare handoff`, чтобы система создала handoff-файл и рабочую копию черновика.',
-                  'Запусти `./power-mode.command <task-id>`: он откроет проект, свежий handoff и рабочую копию в VS Code.',
+                  'Открой рабочую папку в VS Code. Если ты на macOS и используешь локальный помощник проекта, можно запускать `./power-mode.command <task-id>`.',
                   'Дальше уже можно разговаривать с агентом в Continue и править результат онлайн, не ломая основной pipeline.',
                 ]}
                 renderItem={(item) => <List.Item>{item}</List.Item>}
