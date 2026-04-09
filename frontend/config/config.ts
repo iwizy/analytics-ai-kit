@@ -3,10 +3,7 @@ import { defineConfig } from '@umijs/max';
 export default defineConfig({
   npmClient: 'npm',
   mfsu: false,
-  layout: {
-    title: 'Analytics AI Kit',
-    locale: false,
-  },
+  title: 'Analytics AI Kit',
   routes: [
     {
       path: '/',
