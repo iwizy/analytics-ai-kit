@@ -26,6 +26,7 @@ type EnvironmentForm = {
   vscode_ready: boolean;
   continue_ready: boolean;
   model_profile: string;
+  optional_models: string[];
 };
 
 export default function EnvironmentPage() {
@@ -44,6 +45,7 @@ export default function EnvironmentPage() {
       vscode_ready: payload.settings.vscode_ready,
       continue_ready: payload.settings.continue_ready,
       model_profile: payload.settings.model_profile || 'powerful',
+      optional_models: payload.settings.optional_models || [],
     });
   }
 
@@ -64,7 +66,7 @@ export default function EnvironmentPage() {
         body: JSON.stringify(values),
       });
       setSnapshot(payload);
-      form.setFieldsValue({ ...values, confluence_password: '' });
+              form.setFieldsValue({ ...values, confluence_password: '' });
       message.success('Настройки окружения сохранены');
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Не удалось сохранить настройки');
@@ -131,16 +133,28 @@ export default function EnvironmentPage() {
               <Typography.Paragraph type="secondary">
                 Этот выбор влияет не только на подсказки, но и на то, какие модели будут считаться обязательными. При загрузке в разделе «Модели и контекст» будут скачиваться только модели выбранного профиля.
               </Typography.Paragraph>
-              <Form.Item label="Профиль производительности" name="model_profile">
-                <Radio.Group optionType="button" buttonStyle="solid">
-                  <Radio.Button value="light">Лёгкий</Radio.Button>
-                  <Radio.Button value="standard">Стандартный</Radio.Button>
-                  <Radio.Button value="powerful">Мощный</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-              <Space wrap>
-                <Button type="primary" htmlType="submit" loading={saving}>
-                  Сохранить настройки
+                      <Form.Item label="Профиль производительности" name="model_profile">
+                        <Radio.Group optionType="button" buttonStyle="solid">
+                          <Radio.Button value="light">Лёгкий</Radio.Button>
+                          <Radio.Button value="standard">Стандартный</Radio.Button>
+                          <Radio.Button value="powerful">Мощный</Radio.Button>
+                        </Radio.Group>
+                      </Form.Item>
+                      <Form.Item
+                        label="Дополнительные модели"
+                        name="optional_models"
+                        extra="Эти модели не обязательны для базового pipeline. Их можно выбрать, если хочешь дополнительные сценарии вроде второго мнения для ревью."
+                      >
+                        <Checkbox.Group
+                          options={(snapshot?.optional_models || []).map((item) => ({
+                            label: `${item.title} — ${item.description}`,
+                            value: item.model,
+                          }))}
+                        />
+                      </Form.Item>
+                      <Space wrap>
+                        <Button type="primary" htmlType="submit" loading={saving}>
+                          Сохранить настройки
                 </Button>
                 <Button onClick={() => void loadSnapshot()}>Обновить статус</Button>
               </Space>
@@ -195,6 +209,11 @@ export default function EnvironmentPage() {
                           <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
                             {selectedProfile.pipeline_hint}
                           </Typography.Paragraph>
+                          {snapshot?.optional_models?.length ? (
+                            <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                              Дополнительно по выбору: {snapshot.optional_models.map((item) => item.title).join(', ')}.
+                            </Typography.Paragraph>
+                          ) : null}
                         </ProCard>
                       ) : null}
             </Space>

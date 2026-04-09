@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from 'react';
           Input,
           List,
           Segmented,
+          Select,
           Space,
           Tabs,
           Typography,
@@ -62,7 +63,7 @@ import React, { useEffect, useMemo, useState } from 'react';
         };
 
         type SourceMode = 'files' | 'links' | 'both';
-        type BusyKey = 'template' | 'save' | 'links' | 'analyze' | 'draft' | 'gap' | 'refine' | 'pipeline' | 'handoff' | null;
+        type BusyKey = 'template' | 'save' | 'links' | 'analyze' | 'draft' | 'gap' | 'review' | 'refine' | 'pipeline' | 'handoff' | null;
 
         export default function WorkbenchPage() {
           const [environment, setEnvironment] = useState<EnvironmentSnapshot | null>(null);
@@ -70,6 +71,7 @@ import React, { useEffect, useMemo, useState } from 'react';
           const [taskContent, setTaskContent] = useState('');
           const [confluenceUrls, setConfluenceUrls] = useState('');
           const [refineInstructions, setRefineInstructions] = useState('Уточни формулировки, убери неоднозначности и сделай текст пригодным для согласования с разработкой и аналитикой.');
+          const [reviewModel, setReviewModel] = useState('');
           const [sourceMode, setSourceMode] = useState<SourceMode>('both');
           const [runGaps, setRunGaps] = useState(true);
           const [autoRunRefine, setAutoRunRefine] = useState(true);
@@ -78,6 +80,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
           const currentTaskId = taskId.trim();
           const readyForWork = environment?.readiness.article_ready || false;
+          const reviewModelOptions = environment?.review_models || [];
           const linkRows = useMemo(
             () => confluenceUrls.split(/\n+/).map((item) => item.trim()).filter(Boolean),
             [confluenceUrls],
@@ -101,6 +104,15 @@ import React, { useEffect, useMemo, useState } from 'react';
           useEffect(() => {
             void loadEnvironment();
           }, []);
+
+          useEffect(() => {
+            if (!reviewModel && reviewModelOptions.length) {
+              setReviewModel(reviewModelOptions[0]);
+            }
+            if (reviewModel && reviewModelOptions.length && !reviewModelOptions.includes(reviewModel)) {
+              setReviewModel(reviewModelOptions[0]);
+            }
+          }, [reviewModel, reviewModelOptions]);
 
           useEffect(() => {
             if (!currentTaskId) {
@@ -238,6 +250,24 @@ import React, { useEffect, useMemo, useState } from 'react';
                 body: JSON.stringify({ task_id: currentTaskId }),
               });
             }, 'Пробелы и открытые вопросы найдены');
+          }
+
+          async function runReview() {
+            if (!currentTaskId) {
+              message.error('Сначала укажи Task ID');
+              return;
+            }
+            const targetModel = reviewModel || reviewModelOptions[0];
+            if (!targetModel) {
+              message.error('Нет доступной модели для ревью');
+              return;
+            }
+            await withBusy('review', async () => {
+              await apiRequest('/gap-analysis', {
+                method: 'POST',
+                body: JSON.stringify({ task_id: currentTaskId, model: targetModel }),
+              });
+            }, `Ревью выполнено моделью ${targetModel}`);
           }
 
           async function runRefine() {
@@ -477,6 +507,26 @@ import React, { useEffect, useMemo, useState } from 'react';
                     ]}
                     renderItem={(item) => <List.Item>{item}</List.Item>}
                   />
+                </ProCard>
+
+                <ProCard title="Дополнительное ревью" bordered>
+                  <Typography.Paragraph>
+                    Этот шаг нужен для второго мнения после того, как основной draft, gaps и refine уже готовы. Если у тебя подключена дополнительная модель, например GPT OSS 20B, здесь можно явно выбрать её для отдельного ревью.
+                  </Typography.Paragraph>
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Select
+                      value={reviewModel || undefined}
+                      onChange={(value) => setReviewModel(value)}
+                      options={reviewModelOptions.map((item) => ({ label: item, value: item }))}
+                      placeholder="Выбери модель для ревью"
+                    />
+                    <Button loading={busyKey === 'review'} onClick={() => void runReview()} disabled={!reviewModelOptions.length}>
+                      Провести ревью
+                    </Button>
+                    <Typography.Text type="secondary">
+                      Если скачана только одна review-модель, список всё равно останется, но с одним вариантом. Результат сохранится в артефакты ревью.
+                    </Typography.Text>
+                  </Space>
                 </ProCard>
 
                 <ProCard title="Результат и артефакты" bordered>

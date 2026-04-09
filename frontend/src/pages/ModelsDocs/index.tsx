@@ -78,6 +78,14 @@ export default function ModelsDocsPage() {
 
   const activeModels = useMemo(() => environment?.model_plan.required_models || [], [environment]);
   const deferredModels = useMemo(() => environment?.model_plan.deferred_models || [], [environment]);
+  const selectedOptionalModels = useMemo(
+    () => (environment?.optional_models || []).filter((item) => item.selected),
+    [environment],
+  );
+  const missingOptionalModels = useMemo(
+    () => selectedOptionalModels.filter((item) => !item.installed).map((item) => item.model),
+    [selectedOptionalModels],
+  );
   const missingModels = useMemo(() => environment?.model_plan.missing_models || [], [environment]);
   const readyModels = useMemo(() => new Set(environment?.model_plan.ready_models || []), [environment]);
 
@@ -108,6 +116,22 @@ export default function ModelsDocsPage() {
       await refreshAll();
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Не удалось запустить загрузку моделей');
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function pullOptionalModels() {
+    setBusyAction('optional-models');
+    try {
+      await apiRequest('/ui/ops/models/pull', {
+        method: 'POST',
+        body: JSON.stringify({ models: missingOptionalModels }),
+      });
+      message.success('Загрузка дополнительных моделей запущена');
+      await refreshAll();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Не удалось запустить загрузку дополнительных моделей');
     } finally {
       setBusyAction(null);
     }
@@ -204,6 +228,44 @@ export default function ModelsDocsPage() {
               />
             ) : null}
           </ProCard>
+        </ProCard>
+
+        <ProCard title="Дополнительные модели" bordered>
+          <Typography.Paragraph>
+            Эти модели не нужны для базового pipeline и не блокируют работу. Их можно скачать отдельно, если нужен дополнительный сценарий, например второе мнение для ревью.
+          </Typography.Paragraph>
+          <List
+            dataSource={selectedOptionalModels}
+            locale={{ emptyText: 'Пока не выбрано ни одной дополнительной модели в подготовке окружения.' }}
+            renderItem={(item) => (
+              <List.Item
+                actions={[
+                  <Tag key="state" color={item.installed ? 'success' : 'default'}>
+                    {item.installed ? 'Скачана' : 'Не скачана'}
+                  </Tag>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={item.title}
+                  description={item.description}
+                />
+              </List.Item>
+            )}
+          />
+          <Space style={{ marginTop: 16 }} wrap>
+            <Button
+              loading={busyAction === 'optional-models'}
+              onClick={() => void pullOptionalModels()}
+              disabled={!missingOptionalModels.length}
+            >
+              Скачать выбранные дополнительные модели
+            </Button>
+            {selectedOptionalModels.length ? (
+              <Typography.Text type="secondary">
+                Для ревью потом можно будет использовать: {selectedOptionalModels.map((item) => item.title).join(', ')}.
+              </Typography.Text>
+            ) : null}
+          </Space>
         </ProCard>
 
         <ProCard gutter={16} wrap>

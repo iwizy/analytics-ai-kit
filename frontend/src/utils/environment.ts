@@ -6,6 +6,7 @@ export type EnvironmentSnapshot = {
     vscode_ready: boolean;
     continue_ready: boolean;
     model_profile: string;
+    optional_models?: string[];
     templates_mode?: string;
   };
   model_plan: {
@@ -20,6 +21,16 @@ export type EnvironmentSnapshot = {
     refine_model: string;
     continue_model: string;
   };
+  optional_models: Array<{
+    model: string;
+    title: string;
+    description: string;
+    purpose: string;
+    review_capable: boolean;
+    selected: boolean;
+    installed: boolean;
+  }>;
+  review_models: string[];
   readiness: {
     confluence_ready: boolean;
     vscode_ready: boolean;

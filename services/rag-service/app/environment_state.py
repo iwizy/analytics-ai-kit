@@ -50,6 +50,16 @@ _MODEL_RECOMMENDATIONS = [
     },
 ]
 
+_OPTIONAL_MODELS = [
+    {
+        "model": "gpt-oss:20b",
+        "title": "GPT OSS 20B",
+        "description": "Опциональная reasoning-модель для второго мнения, дополнительного ревью и более критичного анализа спорных мест.",
+        "purpose": "review",
+        "review_capable": True,
+    },
+]
+
 
 def _defaults() -> dict[str, Any]:
     return {
@@ -57,6 +67,7 @@ def _defaults() -> dict[str, Any]:
         "vscode_ready": False,
         "continue_ready": False,
         "model_profile": "powerful",
+        "optional_models": [],
         "templates_mode": "power_only",
     }
 
@@ -84,13 +95,28 @@ def load_environment_settings() -> dict[str, Any]:
     return payload
 
 
-def save_environment_settings(*, confluence_base_url: str, vscode_ready: bool, continue_ready: bool, model_profile: str) -> dict[str, Any]:
+def save_environment_settings(
+    *,
+    confluence_base_url: str,
+    vscode_ready: bool,
+    continue_ready: bool,
+    model_profile: str,
+    optional_models: list[str] | None = None,
+) -> dict[str, Any]:
     _ENVIRONMENT_DIR.mkdir(parents=True, exist_ok=True)
+    selected_optional = []
+    seen_optional: set[str] = set()
+    for model in optional_models or []:
+        name = str(model).strip()
+        if name and name not in seen_optional:
+            selected_optional.append(name)
+            seen_optional.add(name)
     payload = {
         "confluence_base_url": confluence_base_url.strip(),
         "vscode_ready": bool(vscode_ready),
         "continue_ready": bool(continue_ready),
         "model_profile": model_profile.strip() or "powerful",
+        "optional_models": selected_optional,
         "templates_mode": "power_only",
     }
     _ENVIRONMENT_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -118,6 +144,22 @@ def get_model_profile(profile_key: str | None) -> dict[str, Any]:
         if profile["key"] == selected_key:
             return dict(profile)
     return dict(_MODEL_RECOMMENDATIONS[-1])
+
+
+def build_optional_models_catalog(*, selected_models: list[str] | None, installed_models: list[str] | None) -> list[dict[str, Any]]:
+    selected_set = {str(item).strip() for item in (selected_models or []) if str(item).strip()}
+    installed_set = set(installed_models or [])
+    catalog: list[dict[str, Any]] = []
+    for item in _OPTIONAL_MODELS:
+        model = str(item["model"])
+        catalog.append(
+            {
+                **item,
+                "selected": model in selected_set,
+                "installed": _is_model_available(model, installed_set),
+            }
+        )
+    return catalog
 
 
 def build_model_plan(*, profile_key: str | None, installed_models: list[str] | None) -> dict[str, Any]:
@@ -158,6 +200,20 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         profile_key=str(settings.get("model_profile") or "powerful"),
         installed_models=installed_models,
     )
+    optional_catalog = build_optional_models_catalog(
+        selected_models=list(settings.get("optional_models") or []),
+        installed_models=installed_models,
+    )
+    selected_optional = [item for item in optional_catalog if item["selected"]]
+    installed_optional_review_models = [
+        item["model"]
+        for item in selected_optional
+        if item.get("review_capable") and item.get("installed")
+    ]
+    review_models: list[str] = []
+    for model_name in [model_plan["review_model"], *installed_optional_review_models]:
+        if model_name and model_name not in review_models:
+            review_models.append(model_name)
     confluence_ready = bool(
         settings.get("confluence_base_url")
         and settings.get("confluence_login")
@@ -189,6 +245,8 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
     return {
         "settings": settings,
         "model_plan": model_plan,
+        "optional_models": optional_catalog,
+        "review_models": review_models,
         "readiness": readiness,
         "recommended_profiles": recommended_model_profiles(),
         "commands": {

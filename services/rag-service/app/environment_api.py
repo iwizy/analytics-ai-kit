@@ -17,6 +17,7 @@ class EnvironmentSettingsRequest(BaseModel):
     vscode_ready: bool = False
     continue_ready: bool = False
     model_profile: str = "powerful"
+    optional_models: list[str] = []
 
 
 @router.get("/ui/environment-settings")
@@ -40,6 +41,7 @@ def ui_save_environment_settings(request: EnvironmentSettingsRequest) -> dict:
         vscode_ready=request.vscode_ready,
         continue_ready=request.continue_ready,
         model_profile=request.model_profile,
+        optional_models=request.optional_models,
     )
     operations = get_operations_status()
     return {
