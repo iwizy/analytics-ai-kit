@@ -47,8 +47,9 @@ if ! curl -fsS "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
   exit 1
 fi
 
+CACHE_BUSTER="$(date +%s)"
 if command -v open >/dev/null 2>&1; then
-  open "http://localhost:${FRONTEND_PORT}"
+  open "http://localhost:${FRONTEND_PORT}/?v=${CACHE_BUSTER}"
 fi
 
 echo "Готово. Интерфейс: http://localhost:${FRONTEND_PORT}"

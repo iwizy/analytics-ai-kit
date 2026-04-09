@@ -3,6 +3,14 @@ import { defineConfig } from '@umijs/max';
 export default defineConfig({
   npmClient: 'npm',
   mfsu: false,
+  devServer: {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+      Surrogate-Control: 'no-store',
+    },
+  },
   routes: [
     { path: '/', redirect: '/environment' },
     {
