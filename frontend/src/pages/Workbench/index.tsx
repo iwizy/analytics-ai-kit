@@ -612,11 +612,11 @@ export default function WorkbenchPage() {
   return (
     <PageContainer
       className="analytics-shell"
-      title="Analytics AI Kit"
-      content="Рабочее место аналитика на базе Ant Design Pro: задача, источники, модели, операции и запуск пайплайна в одном интерфейсе."
+      title="Подготовка статьи"
+      content="Здесь аналитик пошагово собирает задачу, добавляет контекст, запускает генерацию и подготавливает handoff для работы в VS Code + Continue."
       extra={[
         <Button key="refreshOps" icon={<ReloadOutlined />} onClick={() => void refreshOps()}>
-          Обновить Ops
+          Обновить статусы
         </Button>,
         <Button
           key="refreshTask"
@@ -629,6 +629,13 @@ export default function WorkbenchPage() {
       ]}
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Alert
+          showIcon
+          type="info"
+          message="Как пользоваться экраном"
+          description="Шаг 1: задайте Task ID и сохраните task.md. Шаг 2: добавьте файлы, ссылки Confluence или оба источника сразу. Шаг 3: запустите Analyze, Draft, Gaps или полный pipeline. Шаг 4: подготовьте handoff и продолжайте работу в VS Code + Continue."
+        />
+
         {!modelsReady && (
           <Alert
             showIcon
@@ -653,14 +660,20 @@ export default function WorkbenchPage() {
         )}
 
         <ProCard className="analytics-panel" split="vertical" gutter={16}>
-          <ProCard colSpan="58%" title="Task Setup">
+          <ProCard colSpan="58%" title="Шаг 1. Описание задачи">
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              <Typography.Text type="secondary">
+                `Task ID` станет именем рабочей папки задачи. По нему система создаст путь `tasks/inbox/&lt;task-id&gt;/`, будет искать вложения и сохранять артефакты генерации.
+              </Typography.Text>
               <Input
                 size="large"
-                placeholder="Task ID"
+                placeholder="Например: operation-history-ft-v1"
                 value={taskId}
                 onChange={(event) => setTaskId(event.target.value)}
               />
+              <Typography.Text type="secondary">
+                В `task.md` кратко опишите, что именно нужно подготовить, какой контекст уже известен, какие есть ограничения и как понять, что документ готов.
+              </Typography.Text>
               <Input.TextArea
                 rows={10}
                 placeholder="Опишите цель статьи, контекст, ограничения и критерий готовности"
@@ -674,22 +687,25 @@ export default function WorkbenchPage() {
                   loading={busyKey === 'saveTask'}
                   onClick={() => void saveTask()}
                 >
-                  Сохранить task.md
+                  Сохранить описание задачи
                 </Button>
-                <Button onClick={() => void loadTemplate()}>Загрузить шаблон</Button>
+                <Button onClick={() => void loadTemplate()}>Подставить шаблон</Button>
               </Space>
             </Space>
           </ProCard>
 
-          <ProCard colSpan="42%" title="Models & Ops">
+          <ProCard colSpan="42%" title="Сводка по готовности">
             {opsState ? (
               <Space direction="vertical" style={{ width: '100%' }} size={14}>
                 <Alert
                   showIcon
                   type={opsState.docker.available ? 'success' : 'error'}
                   message={opsState.docker.available ? 'Docker доступен' : 'Docker недоступен'}
-                  description={opsState.docker.error || 'Контейнеры и API можно запускать из интерфейса.'}
+                  description={opsState.docker.error || 'Подробное управление контейнерами и моделями вынесено в раздел «Модели и контекст» слева в меню.'}
                 />
+                <Typography.Text type="secondary">
+                  Если здесь виден статус `missing`, сначала скачайте модели в разделе «Модели и контекст», а потом возвращайтесь к генерации статьи.
+                </Typography.Text>
 
                 <Space wrap>
                   <Button
@@ -821,8 +837,11 @@ export default function WorkbenchPage() {
           </ProCard>
         </ProCard>
 
-        <ProCard className="analytics-panel" title="Sources">
+        <ProCard className="analytics-panel" title="Шаг 2. Источники контекста">
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Typography.Text type="secondary">
+              Здесь вы выбираете, откуда система возьмёт контекст для статьи: из загруженных файлов, из ссылок Confluence или сразу из обоих источников. После обработки материалы сохраняются локально в папке задачи и участвуют в генерации как обычные документы.
+            </Typography.Text>
             <Segmented
               block
               value={sourceMode}
@@ -835,8 +854,11 @@ export default function WorkbenchPage() {
             />
 
             {(sourceMode === 'links' || sourceMode === 'mixed') && (
-              <ProCard type="inner" title="Confluence">
+              <ProCard type="inner" title="Ссылки Confluence">
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">
+                    Профиль аналитика нужен, чтобы Playwright мог зайти в закрытый Confluence от имени конкретного пользователя. Система сохранит профиль отдельно, а страницу превратит в локальный `.md` файл внутри вложений задачи.
+                  </Typography.Text>
                   <Space.Compact style={{ width: '100%' }}>
                     <Input
                       placeholder="Профиль аналитика"
@@ -860,12 +882,12 @@ export default function WorkbenchPage() {
                     loading={busyKey === 'saveAnalyst'}
                     onClick={() => void saveAnalystProfile()}
                   >
-                    Сохранить профиль аналитика
+                    Сохранить профиль доступа
                   </Button>
 
                   <Input.TextArea
                     rows={5}
-                    placeholder="Вставьте одну или несколько Confluence ссылок"
+                    placeholder="Вставьте одну или несколько ссылок Confluence, по одной на строку"
                     value={confluenceUrls}
                     onChange={(event) => setConfluenceUrls(event.target.value)}
                   />
@@ -876,15 +898,18 @@ export default function WorkbenchPage() {
                     loading={busyKey === 'importConfluence'}
                     onClick={() => void importConfluence()}
                   >
-                    Импортировать по ссылкам
+                    Импортировать ссылки в контекст
                   </Button>
                 </Space>
               </ProCard>
             )}
 
             {(sourceMode === 'files' || sourceMode === 'mixed') && (
-              <ProCard type="inner" title="Documents Upload">
+              <ProCard type="inner" title="Загрузка файлов">
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">
+                    Загруженные документы копируются в `tasks/inbox/&lt;task-id&gt;/attachments/`. Потом система разбивает их на текстовые фрагменты и использует как контекст для draft, gaps и refine.
+                  </Typography.Text>
                   <Upload.Dragger {...uploadProps}>
                     <p className="ant-upload-drag-icon">
                       <FileAddOutlined />
@@ -898,14 +923,14 @@ export default function WorkbenchPage() {
                     loading={busyKey === 'uploadFiles'}
                     onClick={() => void uploadAttachments()}
                   >
-                    Загрузить документы
+                    Загрузить файлы в задачу
                   </Button>
                 </Space>
               </ProCard>
             )}
 
             <List
-              header="Текущие вложения"
+              header="Что уже подключено к задаче"
               locale={{ emptyText: 'Пока нет вложений' }}
               dataSource={taskState?.attachments || []}
               renderItem={(item) => (
@@ -921,7 +946,7 @@ export default function WorkbenchPage() {
         </ProCard>
 
         <ProCard className="analytics-panel" split="vertical" gutter={16}>
-          <ProCard colSpan="48%" title="Generation">
+          <ProCard colSpan="48%" title="Шаг 3. Генерация документа">
             <Space direction="vertical" size={14} style={{ width: '100%' }}>
               {!modelsReady && (
                 <Alert
@@ -932,6 +957,10 @@ export default function WorkbenchPage() {
                 />
               )}
 
+              <Typography.Text type="secondary">
+                `Analyze` определяет тип документа и предлагает секции. `Draft` создаёт черновик статьи. `Gaps` ищет пробелы и вопросы. `Refine` — это доработка уже созданного черновика: система перечитывает контекст и переписывает текст аккуратнее, полнее и проверяемее.
+              </Typography.Text>
+
               <Segmented
                 value={docType}
                 onChange={(value) => setDocType(String(value))}
@@ -939,10 +968,13 @@ export default function WorkbenchPage() {
               />
 
               <Input
-                placeholder="Инструкции для refine"
+                placeholder="Например: уточни интеграции, убери двусмысленности, добавь открытые вопросы"
                 value={refineInstructions}
                 onChange={(event) => setRefineInstructions(event.target.value)}
               />
+              <Typography.Text type="secondary">
+                Поле выше влияет только на шаг `refine`: сюда можно написать, что именно улучшить в готовом тексте.
+              </Typography.Text>
 
               <Space wrap>
                 <Button
@@ -952,28 +984,28 @@ export default function WorkbenchPage() {
                   loading={busyKey === 'analyze'}
                   onClick={() => void analyzeTask()}
                 >
-                  Analyze
+                  Проанализировать задачу
                 </Button>
                 <Button
                   disabled={actionDisabled}
                   loading={busyKey === 'draft'}
                   onClick={() => void createDraft()}
                 >
-                  Draft
+                  Создать черновик
                 </Button>
                 <Button
                   disabled={actionDisabled}
                   loading={busyKey === 'gap'}
                   onClick={() => void runGapAnalysis()}
                 >
-                  Gaps
+                  Найти пробелы
                 </Button>
                 <Button
                   disabled={actionDisabled}
                   loading={busyKey === 'refine'}
                   onClick={() => void runRefineAction()}
                 >
-                  Refine
+                  Доработать черновик
                 </Button>
               </Space>
 
@@ -984,10 +1016,10 @@ export default function WorkbenchPage() {
                   options={['auto', 'ft', 'nft']}
                 />
                 <Checkbox checked={runGaps} onChange={(event) => setRunGaps(event.target.checked)}>
-                  Запустить gap-analysis
+                  После draft сразу запустить поиск пробелов
                 </Checkbox>
                 <Checkbox checked={runRefine} onChange={(event) => setRunRefine(event.target.checked)}>
-                  Запустить refine
+                  После draft сразу запустить refine
                 </Checkbox>
               </Space>
 
@@ -998,22 +1030,25 @@ export default function WorkbenchPage() {
                 loading={busyKey === 'pipeline' || Boolean(activeRunId)}
                 onClick={() => void runPipeline()}
               >
-                Run Full Pipeline
+                Запустить полный pipeline
               </Button>
               <Button
                 loading={busyKey === 'handoff'}
                 onClick={() => void prepareHandoff()}
               >
-                Prepare for Continue
+                Подготовить handoff для Continue
               </Button>
               <Typography.Text type="secondary">
-                Power mode: `./power-mode.command {currentTaskId || '<task-id>'}`
+                Для Power mode можно открыть проект командой `./power-mode.command {currentTaskId || '<task-id>'}`.
               </Typography.Text>
             </Space>
           </ProCard>
 
-          <ProCard colSpan="52%" title="Status">
+          <ProCard colSpan="52%" title="Шаг 4. Результат и текущее состояние">
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              <Typography.Text type="secondary">
+                Здесь видно, что именно система определила по задаче, на каком этапе находится pipeline и какие стадии уже завершены. Если что-то пошло не так, ошибка тоже появится здесь.
+              </Typography.Text>
               {taskState?.analysis ? (
                 <ProDescriptions
                   column={1}
@@ -1034,7 +1069,7 @@ export default function WorkbenchPage() {
                 <Alert
                   showIcon
                   type="info"
-                  message="Analyze еще не запускался"
+                  message="Анализ задачи ещё не запускался"
                   description={taskState?.analysis_error || 'После запуска здесь появится разбор задачи.'}
                 />
               )}
@@ -1090,24 +1125,24 @@ export default function WorkbenchPage() {
         </ProCard>
 
         <ProCard className="analytics-panel" split="vertical" gutter={16}>
-          <ProCard colSpan="50%" title="Artifacts">
+          <ProCard colSpan="50%" title="Шаг 5. Файлы, которые создала система">
             <Collapse
               items={[
-                renderArtifactList('drafts', 'Drafts', taskState?.artifacts?.drafts || []),
-                renderArtifactList('reviews', 'Reviews', taskState?.artifacts?.reviews || []),
-                renderArtifactList('context_packs', 'Context Packs', taskState?.artifacts?.context_packs || []),
-                renderArtifactList('pipeline_runs', 'Pipeline Runs', taskState?.artifacts?.pipeline_runs || []),
-                renderArtifactList('handoffs', 'Handoffs', taskState?.artifacts?.handoffs || []),
+                renderArtifactList('drafts', 'Черновики', taskState?.artifacts?.drafts || []),
+                renderArtifactList('reviews', 'Пробелы и ревью', taskState?.artifacts?.reviews || []),
+                renderArtifactList('context_packs', 'Контекст-паки', taskState?.artifacts?.context_packs || []),
+                renderArtifactList('pipeline_runs', 'История pipeline', taskState?.artifacts?.pipeline_runs || []),
+                renderArtifactList('handoffs', 'Handoff для Continue', taskState?.artifacts?.handoffs || []),
               ]}
             />
           </ProCard>
 
-          <ProCard colSpan="50%" title="Latest Preview">
+          <ProCard colSpan="50%" title="Быстрый просмотр содержимого">
             <Collapse
               items={[
                 {
                   key: 'draft-preview',
-                  label: 'Draft preview',
+                  label: 'Предпросмотр черновика',
                   children: (
                     <pre className="analytics-json">
                       {taskState?.latest?.draft_preview || 'Нет черновика'}
@@ -1116,7 +1151,7 @@ export default function WorkbenchPage() {
                 },
                 {
                   key: 'gaps-preview',
-                  label: 'Gaps preview',
+                  label: 'Предпросмотр пробелов и вопросов',
                   children: (
                     <pre className="analytics-json">
                       {taskState?.latest?.gaps_preview || 'Нет gap-analysis'}
@@ -1125,7 +1160,7 @@ export default function WorkbenchPage() {
                 },
                 {
                   key: 'handoff-preview',
-                  label: 'Handoff preview',
+                  label: 'Предпросмотр handoff',
                   children: (
                     <pre className="analytics-json">
                       {taskState?.latest?.handoff_preview || 'Нет handoff файла'}

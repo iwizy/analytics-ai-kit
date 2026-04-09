@@ -9,7 +9,17 @@ export default defineConfig({
   routes: [
     {
       path: '/',
+      redirect: '/task',
+    },
+    {
+      path: '/task',
+      name: 'Подготовка статьи',
       component: '@/pages/Workbench',
+    },
+    {
+      path: '/models-docs',
+      name: 'Модели и контекст',
+      component: '@/pages/ModelsDocs',
     },
   ],
 });
