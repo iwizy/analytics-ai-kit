@@ -214,6 +214,54 @@ export default function EnvironmentPage() {
             )}
           />
         </ProCard>
+
+        <ProCard title="Пошаговая настройка VS Code и Continue" bordered>
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="Этот блок нужен для power mode"
+              description="UI собирает материалы и готовит handoff, а VS Code + Continue нужны для живой доработки результата в файлах проекта."
+            />
+
+            <ProCard type="inner" title="1. Подготовить VS Code">
+              <List
+                dataSource={[
+                  'Установи Visual Studio Code, если он ещё не установлен.',
+                  'Открой проект локально: `code /Users/iwizard/Dev/analytics-ai-kit` или просто запусти `./power-mode.command <task-id>` после подготовки handoff.',
+                  'Проверь, что команда `code` доступна в терминале. На macOS это обычно делается через Command Palette → `Shell Command: Install code command in PATH`.',
+                  'После этого вернись сюда и отметь галочку, что VS Code готов.',
+                ]}
+                renderItem={(item) => <List.Item>{item}</List.Item>}
+              />
+            </ProCard>
+
+            <ProCard type="inner" title="2. Подготовить Continue">
+              <List
+                dataSource={[
+                  'Установи расширение Continue в VS Code.',
+                  'Открой Continue и подключи локальный Ollama как провайдер моделей.',
+                  'Если нужен адрес сервиса, используй `http://localhost:11434`.',
+                  `Для текущего профиля машины рекомендуем модель Continue: ${selectedProfile?.continue_model || 'qwen3-coder:30b'}.`,
+                  'После настройки вернись сюда и отметь галочку, что Continue готов.',
+                ]}
+                renderItem={(item) => <List.Item>{item}</List.Item>}
+              />
+            </ProCard>
+
+            <ProCard type="inner" title="3. Как работать после handoff">
+              <List
+                dataSource={[
+                  'Сначала собери задачу в UI: task.md, контекст, draft, gaps, refine.',
+                  'Нажми `Prepare handoff`, чтобы система создала handoff-файл и рабочую копию черновика.',
+                  'Запусти `./power-mode.command <task-id>`: он откроет проект, свежий handoff и рабочую копию в VS Code.',
+                  'Дальше уже можно разговаривать с агентом в Continue и править результат онлайн, не ломая основной pipeline.',
+                ]}
+                renderItem={(item) => <List.Item>{item}</List.Item>}
+              />
+            </ProCard>
+          </Space>
+        </ProCard>
       </Space>
     </PageContainer>
   );
