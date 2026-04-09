@@ -32,8 +32,20 @@ for _ in {1..120}; do
   if curl -fsS "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
     break
   fi
+  frontend_status="$(docker compose "${compose_files[@]}" ps --format json frontend 2>/dev/null | tr -d '\n')"
+  if [[ "$frontend_status" == *"restarting"* ]] || [[ "$frontend_status" == *"exited"* ]]; then
+    echo "Frontend не поднялся. Последние логи:"
+    docker compose "${compose_files[@]}" logs --tail=120 frontend || true
+    exit 1
+  fi
   sleep 2
 done
+
+if ! curl -fsS "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
+  echo "Frontend не ответил вовремя. Последние логи:"
+  docker compose "${compose_files[@]}" logs --tail=120 frontend || true
+  exit 1
+fi
 
 if command -v open >/dev/null 2>&1; then
   open "http://localhost:${FRONTEND_PORT}"

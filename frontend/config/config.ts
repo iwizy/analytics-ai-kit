@@ -3,21 +3,22 @@ import { defineConfig } from '@umijs/max';
 export default defineConfig({
   npmClient: 'npm',
   mfsu: false,
-  title: 'Analytics AI Kit',
   routes: [
+    { path: '/', redirect: '/environment' },
     {
-      path: '/',
-      redirect: '/task',
+      path: '/environment',
+      name: 'Подготовка окружения',
+      component: '@/pages/Environment/index.tsx',
     },
     {
       path: '/task',
       name: 'Подготовка статьи',
-      component: '@/pages/Workbench',
+      component: '@/pages/Workbench/index.tsx',
     },
     {
       path: '/models-docs',
       name: 'Модели и контекст',
-      component: '@/pages/ModelsDocs',
+      component: '@/pages/ModelsDocs/index.tsx',
     },
   ],
 });

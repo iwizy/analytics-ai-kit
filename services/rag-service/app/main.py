@@ -20,6 +20,7 @@ from app.confluence import (
     save_analyst_profile,
 )
 from app.ingest import reindex_all_documents
+from app.environment_api import router as environment_router
 from app.operations import control_containers, get_operations_status, start_models_pull
 from app.search import search_documents
 from app.settings import ARTIFACTS_ROOT, SUPPORTED_EXTENSIONS, TASKS_ROOT
@@ -39,6 +40,7 @@ from app.workflow import (
 )
 
 app = FastAPI(title="Analytics RAG Service", version="0.3.0")
+app.include_router(environment_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
