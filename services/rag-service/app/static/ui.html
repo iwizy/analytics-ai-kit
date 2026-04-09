@@ -335,12 +335,35 @@
 
         <article class="card span-6">
           <h2><span class="step">2</span>Attachments</h2>
-          <p class="sub">Добавьте контекстные документы задачи (.md/.txt/.docx/.pdf).</p>
+          <p class="sub">Добавьте файлы или вставьте ссылки на Confluence, а сервис сам подтянет страницу во вложения.</p>
+
+          <div class="row">
+            <div class="col-4">
+              <label for="analystId">Профиль аналитика</label>
+              <input id="analystId" placeholder="ivan.petrov" />
+            </div>
+            <div class="col-4">
+              <label for="analystLogin">Confluence login</label>
+              <input id="analystLogin" placeholder="ivan.petrov@company.ru" />
+            </div>
+            <div class="col-4">
+              <label for="analystPassword">Confluence password</label>
+              <input id="analystPassword" type="password" placeholder="Введите пароль" />
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="saveAnalystBtn" class="neutral" type="button">Сохранить профиль аналитика</button>
+          </div>
+
+          <label for="confluenceUrls">Confluence ссылки</label>
+          <textarea id="confluenceUrls" placeholder="https://confluence.example.local/wiki/spaces/TEAM/pages/123456789/Page&#10;https://confluence.example.local/display/TEAM/Another+Page"></textarea>
 
           <label for="attachments">Файлы вложений</label>
           <input id="attachments" type="file" multiple />
 
           <div class="actions">
+            <button id="importConfluenceBtn" class="secondary" type="button">Импортировать из Confluence</button>
             <button id="uploadBtn" type="button">Загрузить вложения</button>
           </div>
 
@@ -506,10 +529,22 @@
         return $("taskId").value.trim();
       }
 
+      function analystId() {
+        return $("analystId").value.trim();
+      }
+
       function ensureTaskId() {
         const value = taskId();
         if (!value) {
           throw new Error("Укажите Task ID");
+        }
+        return value;
+      }
+
+      function ensureAnalystId() {
+        const value = analystId();
+        if (!value) {
+          throw new Error("Укажите профиль аналитика");
         }
         return value;
       }
@@ -810,6 +845,73 @@
         }
       }
 
+      async function saveAnalystProfile() {
+        const id = ensureAnalystId();
+        const login = $("analystLogin").value.trim();
+        const password = $("analystPassword").value;
+
+        if (!login) {
+          throw new Error("Укажите Confluence login");
+        }
+        if (!password.trim()) {
+          throw new Error("Укажите Confluence password");
+        }
+
+        setBusy("saveAnalystBtn", true);
+        try {
+          const data = await api("/ui/analyst-profiles", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              analyst_id: id,
+              login,
+              password,
+            }),
+          });
+
+          $("analystPassword").value = "";
+          log(`Профиль аналитика сохранен: ${data.profile.analyst_id}`);
+        } finally {
+          setBusy("saveAnalystBtn", false);
+        }
+      }
+
+      async function importConfluencePages() {
+        const id = ensureTaskId();
+        const analyst = ensureAnalystId();
+        const urls = $("confluenceUrls").value
+          .split(/\n|,/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+        if (urls.length === 0) {
+          throw new Error("Добавьте хотя бы одну ссылку Confluence");
+        }
+
+        setBusy("importConfluenceBtn", true);
+        try {
+          const data = await api("/ui/import-confluence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: id,
+              analyst_id: analyst,
+              urls,
+            }),
+          });
+
+          log(`Импортировано страниц Confluence: ${data.imported.length}`);
+          if ((data.failed || []).length > 0) {
+            log(`Не удалось импортировать страниц: ${data.failed.length}`, "warn");
+          }
+
+          $("confluenceUrls").value = "";
+          await refreshState();
+        } finally {
+          setBusy("importConfluenceBtn", false);
+        }
+      }
+
       async function refreshOpsStatus({ silent = false } = {}) {
         setBusy("opsRefreshBtn", true);
         try {
@@ -1058,6 +1160,8 @@
 
       $("loadTemplateBtn").addEventListener("click", () => safeRun(loadTemplate));
       $("saveTaskBtn").addEventListener("click", () => safeRun(saveTask));
+      $("saveAnalystBtn").addEventListener("click", () => safeRun(saveAnalystProfile));
+      $("importConfluenceBtn").addEventListener("click", () => safeRun(importConfluencePages));
       $("uploadBtn").addEventListener("click", () => safeRun(uploadAttachments));
       $("opsRefreshBtn").addEventListener("click", () => safeRun(() => refreshOpsStatus()));
       $("stackStartBtn").addEventListener("click", () => safeRun(() => runContainerAction("start")));

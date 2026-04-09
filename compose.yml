@@ -42,6 +42,7 @@ services:
       DOCS_ROOT: /data/docs
       TASKS_ROOT: /data/tasks
       ARTIFACTS_ROOT: /data/artifacts
+      SERVICE_STORAGE_ROOT: /data/storage
       CHUNK_SIZE: ${CHUNK_SIZE:-1200}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
       SEARCH_LIMIT: ${SEARCH_LIMIT:-8}
@@ -54,4 +55,5 @@ services:
       - ./docs:/data/docs
       - ./tasks:/data/tasks
       - ./artifacts:/data/artifacts
+      - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock

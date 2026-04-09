@@ -8,7 +8,10 @@ from pathlib import Path
 DOCS_ROOT = Path(os.getenv("DOCS_ROOT") or "/data/docs")
 TASKS_ROOT = Path(os.getenv("TASKS_ROOT") or "/data/tasks")
 ARTIFACTS_ROOT = Path(os.getenv("ARTIFACTS_ROOT") or "/data/artifacts")
+SERVICE_STORAGE_ROOT = Path(os.getenv("SERVICE_STORAGE_ROOT") or "/data/storage")
 DOCKER_SOCKET_PATH = Path(os.getenv("DOCKER_SOCKET_PATH") or "/var/run/docker.sock")
+ANALYST_PROFILES_ROOT = SERVICE_STORAGE_ROOT / "analyst_profiles"
+PLAYWRIGHT_STATE_ROOT = SERVICE_STORAGE_ROOT / "playwright"
 
 QDRANT_URL = os.getenv("QDRANT_URL") or "http://localhost:6333"
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or "analytics_context"

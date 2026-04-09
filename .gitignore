@@ -11,10 +11,12 @@
 storage/qdrant/*
 storage/open-webui/*
 storage/ollama/*
+storage/rag-service/*
 
 # keep folders
 !storage/qdrant/.gitkeep
 !storage/ollama/.gitkeep
+!storage/rag-service/.gitkeep
 
 # =========================
 # USER DOCUMENTS (CONTEXT)

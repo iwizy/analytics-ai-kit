@@ -12,6 +12,11 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from app.confluence import (
+    ConfluenceImportError,
+    import_confluence_urls,
+    save_analyst_profile,
+)
 from app.ingest import reindex_all_documents
 from app.operations import control_containers, get_operations_status, start_models_pull
 from app.search import search_documents
@@ -107,6 +112,17 @@ class ContainerControlRequest(BaseModel):
 class ModelsPullRequest(BaseModel):
     models: list[str] | None = None
     force: bool = False
+
+
+class AnalystProfileRequest(BaseModel):
+    analyst_id: str = Field(min_length=1)
+    login: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class ConfluenceImportRequest(TaskRequest):
+    analyst_id: str = Field(min_length=1)
+    urls: list[str] = Field(min_length=1)
 
 
 def iso_from_timestamp(timestamp: float) -> str:
@@ -274,6 +290,54 @@ async def ui_upload_attachments(task_id: str, files: list[UploadFile] = File(...
         "task_id": safe_task_id,
         "uploaded": uploaded,
         "rejected": rejected,
+    }
+
+
+@app.post("/ui/analyst-profiles")
+def ui_save_analyst_profile(request: AnalystProfileRequest) -> dict:
+    """
+    Save or update per-analyst Confluence credentials.
+    """
+    try:
+        profile = save_analyst_profile(
+            analyst_id=request.analyst_id,
+            login=request.login,
+            password=request.password,
+        )
+    except ConfluenceImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "status": "ok",
+        "profile": profile,
+    }
+
+
+@app.post("/ui/import-confluence")
+def ui_import_confluence(request: ConfluenceImportRequest) -> dict:
+    """
+    Import Confluence pages into task attachments using stored analyst credentials.
+    """
+    safe_task_id = sanitize_task_id(request.task_id)
+    task_dir = TASKS_ROOT / "inbox" / safe_task_id
+    attachments_dir = task_dir / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = import_confluence_urls(
+            analyst_id=request.analyst_id,
+            urls=request.urls,
+            attachments_dir=attachments_dir,
+        )
+    except ConfluenceImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта Confluence: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "task_id": safe_task_id,
+        **result,
     }
 
 
