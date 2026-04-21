@@ -51,12 +51,16 @@ services:
       PIPELINE_STAGE_TIMEOUT_SEC: ${PIPELINE_STAGE_TIMEOUT_SEC:-240}
       PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-1}
       DOCKER_SOCKET_PATH: /var/run/docker.sock
+      HOST_OS_NAME: ${HOST_OS_NAME:-unknown}
+      CONTINUE_CONFIG_HOST_PATH_LABEL: ${CONTINUE_CONFIG_HOST_PATH_LABEL:-}
+      CONTINUE_CONFIG_ROOT: /host-continue
     volumes:
       - ./docs:/data/docs
       - ./tasks:/data/tasks
       - ./artifacts:/data/artifacts
       - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${CONTINUE_CONFIG_HOST_DIR:-./storage/continue-empty}:/host-continue:ro
 
   frontend:
     build:

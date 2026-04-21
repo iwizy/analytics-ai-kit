@@ -28,6 +28,7 @@ PIPELINE_REFINE_MODEL = os.getenv("PIPELINE_REFINE_MODEL") or REFINE_MODEL
 
 REQUIRED_MODELS = (
     "nomic-embed-text",
+    "gemma4:e2b",
     "qwen2.5:7b",
     "qwen2.5-coder:14b",
     "qwen3-coder:30b",

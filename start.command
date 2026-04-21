@@ -5,6 +5,23 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 FRONTEND_PORT="${FRONTEND_PORT:-3001}"
+mkdir -p "$ROOT_DIR/storage/continue-empty"
+
+HOST_OS_NAME="linux"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  HOST_OS_NAME="macos"
+fi
+
+CONTINUE_CONFIG_HOST_DIR="$ROOT_DIR/storage/continue-empty"
+CONTINUE_CONFIG_HOST_PATH_LABEL="~/.continue/config.yaml"
+if [[ -d "$HOME/.continue" ]]; then
+  CONTINUE_CONFIG_HOST_DIR="$HOME/.continue"
+  CONTINUE_CONFIG_HOST_PATH_LABEL="$HOME/.continue/config.yaml"
+fi
+
+export HOST_OS_NAME
+export CONTINUE_CONFIG_HOST_DIR
+export CONTINUE_CONFIG_HOST_PATH_LABEL
 
 compose_files=(-f compose.yml)
 if [[ "$(uname -s)" == "Darwin" && -f compose.macos.yml ]]; then

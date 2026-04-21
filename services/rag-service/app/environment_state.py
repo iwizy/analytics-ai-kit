@@ -1,28 +1,40 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from app.confluence import ConfluenceImportError, load_analyst_profile
-from app.settings import SERVICE_STORAGE_ROOT
+from app.settings import DOCS_ROOT, SERVICE_STORAGE_ROOT
+import yaml
 
 DEFAULT_ANALYST_ID = "default"
 _ENVIRONMENT_DIR = SERVICE_STORAGE_ROOT / "environment"
 _ENVIRONMENT_FILE = _ENVIRONMENT_DIR / "settings.json"
+_CONTINUE_CONFIG_ROOT = Path(os.getenv("CONTINUE_CONFIG_ROOT") or "/host-continue")
+_CONTINUE_CONFIG_PATH = _CONTINUE_CONFIG_ROOT / "config.yaml"
+_CONTINUE_CONFIG_PATH_LABEL = os.getenv("CONTINUE_CONFIG_HOST_PATH_LABEL") or "~/.continue/config.yaml"
+_HOST_OS_NAME = (os.getenv("HOST_OS_NAME") or "unknown").strip().lower()
+_CONTINUE_TEMPLATE_PATH = DOCS_ROOT / "continue" / "config.template.yaml"
+_CONTINUE_CONFIG_PATHS = {
+    "macos": "~/.continue/config.yaml",
+    "windows": r"%USERPROFILE%\\.continue\\config.yaml",
+    "linux": "~/.continue/config.yaml",
+}
 
 _MODEL_RECOMMENDATIONS = [
     {
         "key": "light",
         "title": "Легкий профиль",
-        "description": "Для ноутбуков с ограниченной памятью. Быстрее отвечает, но глубина проработки и качество формулировок могут быть проще.",
-        "continue_model": "qwen2.5:7b",
-        "pipeline_hint": "Если машина начинает шуметь или упирается в память, начни с облегченной модели в Continue и только потом повышай качество.",
-        "required_models": ["nomic-embed-text", "qwen2.5:7b"],
-        "deferred_models": ["qwen2.5-coder:14b", "qwen3-coder:30b"],
-        "draft_model": "qwen2.5:7b",
-        "review_model": "qwen2.5:7b",
-        "refine_model": "qwen2.5:7b",
+        "description": "Для ноутбуков с ограниченной памятью. В основе — Gemma 4 E2B: она легче по памяти и лучше подходит для слабых машин.",
+        "continue_model": "gemma4:e2b",
+        "pipeline_hint": "Если машина начинает шуметь или упирается в память, начни с Gemma 4 E2B. Это самый щадящий профиль для локальной работы.",
+        "required_models": ["nomic-embed-text", "gemma4:e2b"],
+        "deferred_models": ["qwen2.5:7b", "qwen2.5-coder:14b", "qwen3-coder:30b"],
+        "draft_model": "gemma4:e2b",
+        "review_model": "gemma4:e2b",
+        "refine_model": "gemma4:e2b",
     },
     {
         "key": "standard",
@@ -59,6 +71,10 @@ _OPTIONAL_MODELS = [
         "review_capable": True,
     },
 ]
+
+
+def _continue_api_base() -> str:
+    return "http://127.0.0.1:11434"
 
 
 def _defaults() -> dict[str, Any]:
@@ -184,6 +200,159 @@ def build_model_plan(*, profile_key: str | None, installed_models: list[str] | N
     }
 
 
+def _continue_model_specs(profile_key: str | None, optional_catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    profile = get_model_profile(profile_key)
+    specs: list[dict[str, Any]] = [
+        {
+            "alias": "fast",
+            "model": "gemma4:e2b" if profile["key"] == "light" else "qwen2.5:7b",
+            "required": True,
+            "purpose": "Быстрые ответы и лёгкие правки в Continue.",
+        },
+        {
+            "alias": "main",
+            "model": str(profile["continue_model"]),
+            "required": True,
+            "purpose": "Основной разговорный режим в Continue для текущего профиля машины.",
+        },
+        {
+            "alias": "heavy",
+            "model": "qwen3-coder:30b",
+            "required": profile["key"] == "powerful",
+            "purpose": "Тяжёлый режим для глубокой переработки документа и длинного контекста.",
+        },
+    ]
+    review_model = next(
+        (
+            item["model"]
+            for item in optional_catalog
+            if item.get("purpose") == "review" and item.get("selected")
+        ),
+        "",
+    )
+    if review_model:
+        specs.append(
+            {
+                "alias": "review",
+                "model": review_model,
+                "required": False,
+                "purpose": "Второе мнение и дополнительное ревью после основного пайплайна.",
+            }
+        )
+    return specs
+
+
+def _dump_continue_template(profile_key: str | None, optional_catalog: list[dict[str, Any]]) -> str:
+    api_base = _continue_api_base()
+    models: list[dict[str, Any]] = []
+    for spec in _continue_model_specs(profile_key, optional_catalog):
+        entry: dict[str, Any] = {
+            "name": spec["alias"],
+            "provider": "ollama",
+            "model": spec["model"],
+            "apiBase": api_base,
+        }
+        if spec["alias"] in {"main", "heavy", "review"}:
+            entry["capabilities"] = ["tool_use"]
+        models.append(entry)
+    payload = {
+        "name": "Analytics AI Kit",
+        "version": "1.0.0",
+        "schema": "v1",
+        "models": models,
+        "context": [
+            {"provider": "code"},
+            {"provider": "docs"},
+            {"provider": "diff"},
+            {"provider": "terminal"},
+            {"provider": "problems"},
+            {"provider": "folder"},
+        ],
+    }
+    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+
+
+def _load_continue_config() -> dict[str, Any]:
+    path = _CONTINUE_CONFIG_PATH
+    exists = path.exists()
+    payload: dict[str, Any] = {}
+    parse_error = ""
+    if exists:
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                payload = loaded
+            else:
+                parse_error = "Файл Continue найден, но его структура не похожа на YAML-объект."
+        except Exception as exc:
+            parse_error = str(exc)
+    return {
+        "exists": exists,
+        "payload": payload,
+        "parse_error": parse_error,
+    }
+
+
+def build_continue_config_snapshot(*, profile_key: str | None, optional_catalog: list[dict[str, Any]]) -> dict[str, Any]:
+    loaded = _load_continue_config()
+    payload = dict(loaded.get("payload") or {})
+    current_models: list[dict[str, Any]] = []
+    for item in payload.get("models") or []:
+        if not isinstance(item, dict):
+            continue
+        alias = str(item.get("name") or "").strip()
+        model = str(item.get("model") or "").strip()
+        provider = str(item.get("provider") or "").strip()
+        api_base = str(item.get("apiBase") or "").strip()
+        if alias:
+            current_models.append(
+                {
+                    "alias": alias,
+                    "model": model,
+                    "provider": provider,
+                    "api_base": api_base,
+                }
+            )
+    current_aliases = {item["alias"]: item for item in current_models}
+    recommended = _continue_model_specs(profile_key, optional_catalog)
+    missing_aliases: list[str] = []
+    mismatched_aliases: list[dict[str, str]] = []
+    ready = True
+    for spec in recommended:
+        current = current_aliases.get(spec["alias"])
+        if current is None:
+            if spec["required"]:
+                ready = False
+                missing_aliases.append(spec["alias"])
+            continue
+        if current.get("model") != spec["model"]:
+            ready = False
+            mismatched_aliases.append(
+                {
+                    "alias": spec["alias"],
+                    "expected_model": spec["model"],
+                    "actual_model": str(current.get("model") or ""),
+                }
+            )
+    if loaded["parse_error"] or not loaded["exists"]:
+        ready = False
+    status = "ready" if ready else "needs_attention"
+    return {
+        "status": status,
+        "host_os": _HOST_OS_NAME,
+        "detected_path": _CONTINUE_CONFIG_PATH_LABEL,
+        "known_paths": dict(_CONTINUE_CONFIG_PATHS),
+        "exists": bool(loaded["exists"]),
+        "parse_error": str(loaded["parse_error"] or ""),
+        "template_repo_path": "docs/continue/config.template.yaml",
+        "current_models": current_models,
+        "recommended_models": recommended,
+        "missing_aliases": missing_aliases,
+        "mismatched_aliases": mismatched_aliases,
+        "recommended_yaml": _dump_continue_template(profile_key, optional_catalog),
+    }
+
+
 def get_runtime_model_bundle(profile_key: str | None = None) -> dict[str, str]:
     profile = get_model_profile(profile_key or load_environment_settings().get("model_profile"))
     return {
@@ -204,6 +373,10 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         selected_models=list(settings.get("optional_models") or []),
         installed_models=installed_models,
     )
+    continue_config = build_continue_config_snapshot(
+        profile_key=str(settings.get("model_profile") or "powerful"),
+        optional_catalog=optional_catalog,
+    )
     selected_optional = [item for item in optional_catalog if item["selected"]]
     installed_optional_review_models = [
         item["model"]
@@ -220,7 +393,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         and settings.get("has_confluence_password")
     )
     vscode_ready = bool(settings.get("vscode_ready"))
-    continue_ready = bool(settings.get("continue_ready"))
+    continue_ready = bool(settings.get("continue_ready")) and continue_config["status"] == "ready"
     models_ready = not model_plan["missing_models"]
 
     missing_items: list[str] = []
@@ -228,8 +401,10 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         missing_items.append("Заполнить Base URL, логин и пароль Confluence")
     if not vscode_ready:
         missing_items.append("Отметить готовность VS Code")
-    if not continue_ready:
+    if not settings.get("continue_ready"):
         missing_items.append("Отметить готовность Continue")
+    elif continue_config["status"] != "ready":
+        missing_items.append("Привести config.yaml Continue к рекомендуемому виду")
     if not models_ready:
         missing_items.append("Скачать модели для выбранного профиля")
 
@@ -246,6 +421,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         "settings": settings,
         "model_plan": model_plan,
         "optional_models": optional_catalog,
+        "continue_config": continue_config,
         "review_models": review_models,
         "readiness": readiness,
         "recommended_profiles": recommended_model_profiles(),

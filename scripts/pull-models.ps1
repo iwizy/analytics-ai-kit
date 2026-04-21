@@ -7,7 +7,7 @@ switch ($profile) {
   "light" {
     $models = @(
       "nomic-embed-text",
-      "qwen2.5:7b"
+      "gemma4:e2b"
     )
   }
   "standard" {

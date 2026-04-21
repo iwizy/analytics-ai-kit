@@ -8,7 +8,7 @@ case "${PROFILE}" in
   light)
     MODELS=(
       "nomic-embed-text"
-      "qwen2.5:7b"
+      "gemma4:e2b"
     )
     ;;
   standard)

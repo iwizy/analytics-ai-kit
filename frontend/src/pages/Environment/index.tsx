@@ -278,10 +278,145 @@ export default function EnvironmentPage() {
                   'Если нужен адрес сервиса, используй `http://localhost:11434`.',
                   `Для текущего профиля машины рекомендуем модель Continue: ${selectedProfile?.continue_model || 'qwen3-coder:30b'}.`,
                   'Если машина не тянет тяжёлую модель, вернись выше и переключи профиль на более лёгкий. Это повлияет на рекомендацию для Continue.',
-                  'После настройки вернись сюда и отметь галочку, что Continue готов.',
+                  'После настройки вернись сюда и отметь галочку, что Continue готов. Теперь система ещё и смотрит сам config.yaml, а не только на галочку.',
                 ]}
                 renderItem={(item) => <List.Item>{item}</List.Item>}
               />
+
+              {snapshot?.continue_config ? (
+                <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 16 }}>
+                  <Alert
+                    type={snapshot.continue_config.status === 'ready' ? 'success' : 'warning'}
+                    showIcon
+                    message={
+                      snapshot.continue_config.status === 'ready'
+                        ? 'Конфиг Continue похож на рекомендуемый'
+                        : 'Конфиг Continue нужно проверить'
+                    }
+                    description={
+                      snapshot.continue_config.status === 'ready'
+                        ? `Система нашла файл ${snapshot.continue_config.detected_path} и видит в нём нужные алиасы для работы.`
+                        : snapshot.continue_config.exists
+                          ? `Файл ${snapshot.continue_config.detected_path} найден, но в нём не хватает нужных алиасов или модели отличаются от рекомендуемых.`
+                          : `Файл ${snapshot.continue_config.detected_path} пока не найден. Можно создать его по шаблону из репозитория.`
+                    }
+                  />
+
+                  <Descriptions column={1} size="small" bordered>
+                    <Descriptions.Item label="Где искать на macOS">
+                      <Typography.Text code>{snapshot.continue_config.known_paths.macos}</Typography.Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Где искать на Windows">
+                      <Typography.Text code>{snapshot.continue_config.known_paths.windows}</Typography.Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Проверенный путь на этой машине">
+                      <Typography.Text code>{snapshot.continue_config.detected_path}</Typography.Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Шаблон в репозитории">
+                      <Typography.Text code>{snapshot.continue_config.template_repo_path}</Typography.Text>
+                    </Descriptions.Item>
+                  </Descriptions>
+
+                  {snapshot.continue_config.parse_error ? (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="YAML не удалось разобрать"
+                      description={snapshot.continue_config.parse_error}
+                    />
+                  ) : null}
+
+                  <ProCard type="inner" title="Какие алиасы рекомендуем для Continue">
+                    <List
+                      dataSource={snapshot.continue_config.recommended_models}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag color={item.required ? 'blue' : 'default'}>{item.alias}</Tag>
+                              <Typography.Text code>{item.model}</Typography.Text>
+                              <Tag>{item.required ? 'обязательно для профиля' : 'опционально'}</Tag>
+                            </Space>
+                            <Typography.Text type="secondary">{item.purpose}</Typography.Text>
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  </ProCard>
+
+                  <ProCard type="inner" title="Что сейчас найдено в config.yaml">
+                    <List
+                      locale={{ emptyText: 'Пока не нашли ни одной модели. Скопируй шаблон и подставь свои значения.' }}
+                      dataSource={snapshot.continue_config.current_models}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag>{item.alias}</Tag>
+                              <Typography.Text code>{item.model}</Typography.Text>
+                              <Typography.Text type="secondary">{item.provider || 'provider не указан'}</Typography.Text>
+                            </Space>
+                            <Typography.Text type="secondary">
+                              apiBase: {item.api_base || 'не указан'}
+                            </Typography.Text>
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  </ProCard>
+
+                  {snapshot.continue_config.missing_aliases.length ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Не хватает алиасов"
+                      description={`Добавь в config.yaml алиасы: ${snapshot.continue_config.missing_aliases.join(', ')}`}
+                    />
+                  ) : null}
+
+                  {snapshot.continue_config.mismatched_aliases.length ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Некоторые алиасы смотрят не на те модели"
+                      description={snapshot.continue_config.mismatched_aliases
+                        .map((item) => `${item.alias}: сейчас ${item.actual_model || 'не указано'}, рекомендуем ${item.expected_model}`)
+                        .join(' | ')}
+                    />
+                  ) : null}
+
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                    Если удобно, можно взять файл-шаблон из репозитория и адаптировать его под свою машину. Для большинства аналитиков достаточно алиасов
+                    {' '}
+                    <Typography.Text code>fast</Typography.Text>,
+                    {' '}
+                    <Typography.Text code>main</Typography.Text>
+                    {' '}и, при мощной машине,
+                    {' '}
+                    <Typography.Text code>heavy</Typography.Text>.
+                    {' '}Алиас
+                    {' '}
+                    <Typography.Text code>review</Typography.Text>
+                    {' '}имеет смысл добавлять, если ты отдельно скачал GPT OSS 20B для второго мнения.
+                  </Typography.Paragraph>
+
+                  <Typography.Title level={5} style={{ marginBottom: 0 }}>
+                    Рекомендуемый YAML для текущего профиля
+                  </Typography.Title>
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: 16,
+                      overflowX: 'auto',
+                      borderRadius: 8,
+                      background: '#fafafa',
+                      border: '1px solid #f0f0f0',
+                    }}
+                  >
+                    {snapshot.continue_config.recommended_yaml}
+                  </pre>
+                </Space>
+              ) : null}
             </ProCard>
 
             <ProCard type="inner" title="3. Как работать после handoff">

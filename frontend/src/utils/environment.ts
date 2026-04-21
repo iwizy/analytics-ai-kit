@@ -30,6 +30,34 @@ export type EnvironmentSnapshot = {
     selected: boolean;
     installed: boolean;
   }>;
+  continue_config: {
+    status: string;
+    host_os: string;
+    detected_path: string;
+    known_paths: Record<string, string>;
+    exists: boolean;
+    parse_error: string;
+    template_repo_path: string;
+    current_models: Array<{
+      alias: string;
+      model: string;
+      provider: string;
+      api_base: string;
+    }>;
+    recommended_models: Array<{
+      alias: string;
+      model: string;
+      required: boolean;
+      purpose: string;
+    }>;
+    missing_aliases: string[];
+    mismatched_aliases: Array<{
+      alias: string;
+      expected_model: string;
+      actual_model: string;
+    }>;
+    recommended_yaml: string;
+  };
   review_models: string[];
   readiness: {
     confluence_ready: boolean;
