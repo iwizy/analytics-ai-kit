@@ -108,11 +108,12 @@ def load_environment_settings() -> dict[str, Any]:
     _ENVIRONMENT_DIR.mkdir(parents=True, exist_ok=True)
     payload = _defaults()
     payload.update(_read_json(_ENVIRONMENT_FILE))
+    saved_login = str(payload.get("confluence_login") or "")
     try:
         profile = load_analyst_profile(DEFAULT_ANALYST_ID)
     except ConfluenceImportError:
         profile = None
-    payload["confluence_login"] = str(profile.get("login") or "") if profile else ""
+    payload["confluence_login"] = str(profile.get("login") or "") if profile else saved_login
     payload["has_confluence_password"] = bool(profile and profile.get("password"))
     return payload
 
@@ -120,6 +121,7 @@ def load_environment_settings() -> dict[str, Any]:
 def save_environment_settings(
     *,
     confluence_base_url: str,
+    confluence_login: str,
     vscode_ready: bool,
     continue_ready: bool,
     syncthing_ready: bool,
@@ -139,6 +141,7 @@ def save_environment_settings(
             seen_optional.add(name)
     payload = {
         "confluence_base_url": confluence_base_url.strip(),
+        "confluence_login": confluence_login.strip(),
         "vscode_ready": bool(vscode_ready),
         "continue_ready": bool(continue_ready),
         "syncthing_ready": bool(syncthing_ready),

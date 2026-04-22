@@ -42,6 +42,7 @@ def ui_save_environment_settings(request: EnvironmentSettingsRequest) -> dict:
         save_analyst_profile(DEFAULT_ANALYST_ID, login, password)
     save_environment_settings(
         confluence_base_url=request.confluence_base_url,
+        confluence_login=request.confluence_login,
         vscode_ready=request.vscode_ready,
         continue_ready=request.continue_ready,
         syncthing_ready=request.syncthing_ready,

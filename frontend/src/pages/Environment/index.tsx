@@ -14,6 +14,7 @@ import {
   Space,
   Tag,
   Typography,
+  Divider,
   message,
 } from 'antd';
 
@@ -39,11 +40,43 @@ export default function EnvironmentPage() {
   const selectedModelProfile = Form.useWatch('model_profile', form) || 'powerful';
   const [snapshot, setSnapshot] = useState<EnvironmentSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
+  const [baselineValues, setBaselineValues] = useState<EnvironmentForm | null>(null);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  function normalizeFormValues(values: Partial<EnvironmentForm> | null | undefined): EnvironmentForm {
+    const optionalModels = [...(values?.optional_models || [])]
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .sort();
+
+    return {
+      confluence_base_url: String(values?.confluence_base_url || '').trim(),
+      confluence_login: String(values?.confluence_login || '').trim(),
+      confluence_password: String(values?.confluence_password || ''),
+      vscode_ready: Boolean(values?.vscode_ready),
+      continue_ready: Boolean(values?.continue_ready),
+      syncthing_ready: Boolean(values?.syncthing_ready),
+      model_profile: String(values?.model_profile || 'powerful'),
+      optional_models: optionalModels,
+      exchange_folder: String(values?.exchange_folder || '').trim(),
+      exchange_auto_scan: values?.exchange_auto_scan !== false,
+      exchange_poll_interval_sec: Number(values?.exchange_poll_interval_sec || 60),
+    };
+  }
+
+  function applyDirtyState(nextValues?: Partial<EnvironmentForm>) {
+    if (!baselineValues) {
+      setHasChanges(false);
+      return;
+    }
+    const current = normalizeFormValues(nextValues || form.getFieldsValue(true));
+    setHasChanges(JSON.stringify(current) !== JSON.stringify(baselineValues));
+  }
 
   async function loadSnapshot() {
     const payload = await apiRequest<EnvironmentSnapshot>('/ui/environment-settings');
     setSnapshot(payload);
-    form.setFieldsValue({
+    const values = normalizeFormValues({
       confluence_base_url: payload.settings.confluence_base_url,
       confluence_login: payload.settings.confluence_login,
       confluence_password: '',
@@ -56,6 +89,9 @@ export default function EnvironmentPage() {
       exchange_auto_scan: payload.settings.exchange_auto_scan ?? true,
       exchange_poll_interval_sec: payload.settings.exchange_poll_interval_sec || 60,
     });
+    form.setFieldsValue(values);
+    setBaselineValues(values);
+    setHasChanges(false);
   }
 
   useEffect(() => {
@@ -75,13 +111,28 @@ export default function EnvironmentPage() {
         body: JSON.stringify(values),
       });
       setSnapshot(payload);
-              form.setFieldsValue({ ...values, confluence_password: '' });
+      const nextValues = normalizeFormValues({ ...values, confluence_password: '' });
+      form.setFieldsValue(nextValues);
+      setBaselineValues(nextValues);
+      setHasChanges(false);
       message.success('Настройки окружения сохранены');
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Не удалось сохранить настройки');
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSave() {
+    await saveSettings(normalizeFormValues(form.getFieldsValue(true)));
+  }
+
+  function resetToSavedState() {
+    if (!baselineValues) {
+      return;
+    }
+    form.setFieldsValue(baselineValues);
+    setHasChanges(false);
   }
 
   return (
@@ -106,15 +157,19 @@ export default function EnvironmentPage() {
             <Typography.Paragraph>
               Здесь сохраняются базовый адрес Confluence и твои учётные данные. После этого в статье ты будешь вставлять только ссылки, без повторного ввода логина и пароля.
             </Typography.Paragraph>
-            <Form form={form} layout="vertical" onFinish={saveSettings} initialValues={{ model_profile: 'powerful', exchange_auto_scan: true, exchange_poll_interval_sec: 60 }}>
+            <Form
+              form={form}
+              layout="vertical"
+              initialValues={{ model_profile: 'powerful', exchange_auto_scan: true, exchange_poll_interval_sec: 60 }}
+              onValuesChange={(_, allValues) => applyDirtyState(allValues as Partial<EnvironmentForm>)}
+            >
               <Form.Item
                 label="Base URL Confluence"
                 name="confluence_base_url"
-                rules={[{ required: true, message: 'Укажи корневой адрес Confluence' }]}
               >
                 <Input placeholder="https://confluence.company.ru" prefix={<LinkOutlined />} />
               </Form.Item>
-              <Form.Item label="Логин" name="confluence_login" rules={[{ required: true, message: 'Укажи логин' }]}>
+              <Form.Item label="Логин" name="confluence_login">
                 <Input placeholder="name.surname" />
               </Form.Item>
               <Form.Item
@@ -206,12 +261,7 @@ export default function EnvironmentPage() {
                           }))}
                         />
                       </Form.Item>
-                      <Space wrap>
-                        <Button type="primary" htmlType="submit" loading={saving}>
-                          Сохранить настройки
-                </Button>
-                <Button onClick={() => void loadSnapshot()}>Обновить статус</Button>
-              </Space>
+                      <Button onClick={() => void loadSnapshot()}>Обновить статус</Button>
             </Form>
           </ProCard>
 
@@ -579,6 +629,41 @@ export default function EnvironmentPage() {
           </Space>
         </ProCard>
       </Space>
+      {hasChanges ? (
+        <div
+          style={{
+            position: 'fixed',
+            right: 24,
+            bottom: 24,
+            zIndex: 1000,
+            width: 'min(560px, calc(100vw - 32px))',
+            background: '#ffffff',
+            border: '1px solid #d9d9d9',
+            borderRadius: 12,
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.12)',
+            padding: 16,
+          }}
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <div>
+              <Typography.Text strong>Есть несохранённые изменения</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">
+                Сохранить можно в любом промежуточном состоянии, даже если ты заполнил только одно поле. Недостающие настройки можно добавить позже.
+              </Typography.Text>
+            </div>
+            <Divider style={{ margin: 0 }} />
+            <Space wrap>
+              <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+                Сохранить
+              </Button>
+              <Button onClick={resetToSavedState} disabled={saving}>
+                Вернуть сохранённое
+              </Button>
+            </Space>
+          </Space>
+        </div>
+      ) : null}
     </PageContainer>
   );
 }
