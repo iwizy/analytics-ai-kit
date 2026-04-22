@@ -6,6 +6,7 @@ import {
   FileTextOutlined,
   SettingOutlined,
   StopOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { Alert, Badge, Layout, Menu, Space, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
@@ -43,6 +44,7 @@ export default function AppLayout() {
 
   const taskLocked = environment ? !environment.readiness.article_ready : false;
   const contextWarning = environment ? !environment.readiness.all_ready : false;
+  const exchangeWarning = environment ? environment.exchange.new_bundles_count > 0 || environment.exchange.status !== 'ready' : false;
   const wrappedMenuLabelStyle: React.CSSProperties = { whiteSpace: 'normal', lineHeight: 1.35 };
 
   const items = useMemo<MenuProps['items']>(() => [
@@ -69,10 +71,24 @@ export default function AppLayout() {
         </Link>
       ),
     },
-  ], [contextWarning, taskLocked]);
+    {
+      key: '/exchange',
+      icon: <SwapOutlined />,
+      label: (
+        <Link to="/exchange">
+          <Space size={8}>
+            <span style={wrappedMenuLabelStyle}>Обмен контекстом</span>
+            <Badge count={environment?.exchange.new_bundles_count || 0} size="small" style={{ backgroundColor: exchangeWarning ? '#ff4d4f' : '#52c41a' }} />
+          </Space>
+        </Link>
+      ),
+    },
+  ], [contextWarning, exchangeWarning, environment?.exchange.new_bundles_count, taskLocked]);
 
   const selectedKey = location.pathname.startsWith('/models-docs')
     ? '/models-docs'
+    : location.pathname.startsWith('/exchange')
+      ? '/exchange'
     : location.pathname.startsWith('/task')
       ? '/task'
       : '/environment';

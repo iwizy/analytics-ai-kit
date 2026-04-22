@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircleOutlined, DownloadOutlined, LinkOutlined, ToolOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, DownloadOutlined, LinkOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
   Alert,
@@ -8,6 +8,7 @@ import {
   Descriptions,
   Form,
   Input,
+  InputNumber,
   List,
   Radio,
   Space,
@@ -25,8 +26,12 @@ type EnvironmentForm = {
   confluence_password: string;
   vscode_ready: boolean;
   continue_ready: boolean;
+  syncthing_ready: boolean;
   model_profile: string;
   optional_models: string[];
+  exchange_folder: string;
+  exchange_auto_scan: boolean;
+  exchange_poll_interval_sec: number;
 };
 
 export default function EnvironmentPage() {
@@ -44,8 +49,12 @@ export default function EnvironmentPage() {
       confluence_password: '',
       vscode_ready: payload.settings.vscode_ready,
       continue_ready: payload.settings.continue_ready,
+      syncthing_ready: payload.settings.syncthing_ready,
       model_profile: payload.settings.model_profile || 'powerful',
       optional_models: payload.settings.optional_models || [],
+      exchange_folder: payload.settings.exchange_folder || payload.exchange.mounted_path,
+      exchange_auto_scan: payload.settings.exchange_auto_scan ?? true,
+      exchange_poll_interval_sec: payload.settings.exchange_poll_interval_sec || 60,
     });
   }
 
@@ -78,7 +87,7 @@ export default function EnvironmentPage() {
   return (
     <PageContainer
       title="Подготовка окружения"
-      subTitle="Здесь один раз настраиваются доступы, локальные инструменты и модельный профиль. Пока шаги ниже не готовы, раздел статьи останется недоступен."
+      subTitle="Здесь один раз настраиваются доступы, локальные инструменты, обмен без сервера и модельный профиль. Пока базовые шаги ниже не готовы, раздел статьи останется недоступен."
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {snapshot ? (
@@ -97,7 +106,7 @@ export default function EnvironmentPage() {
             <Typography.Paragraph>
               Здесь сохраняются базовый адрес Confluence и твои учётные данные. После этого в статье ты будешь вставлять только ссылки, без повторного ввода логина и пароля.
             </Typography.Paragraph>
-            <Form form={form} layout="vertical" onFinish={saveSettings} initialValues={{ model_profile: 'powerful' }}>
+            <Form form={form} layout="vertical" onFinish={saveSettings} initialValues={{ model_profile: 'powerful', exchange_auto_scan: true, exchange_poll_interval_sec: 60 }}>
               <Form.Item
                 label="Base URL Confluence"
                 name="confluence_base_url"
@@ -129,7 +138,52 @@ export default function EnvironmentPage() {
                 <Checkbox>Continue настроен и готов общаться с локальными моделями</Checkbox>
               </Form.Item>
 
-              <Typography.Title level={5}>3. Рекомендация по модели</Typography.Title>
+              <Typography.Title level={5}>3. Командный обмен без облака и без git</Typography.Title>
+              <Typography.Paragraph type="secondary">
+                Для обмена между аналитиками рекомендуем `Syncthing` как транспорт и встроенный `VS Code Compare` как стандартный способ разбирать расхождения. Система будет смотреть не на весь проект, а только на отдельную папку обмена с bundle-пакетами.
+              </Typography.Paragraph>
+              <Form.Item
+                label="Путь к папке обмена"
+                name="exchange_folder"
+                extra="После изменения пути нажми «Сохранить настройки», а затем перезапусти стек через ./start.command, чтобы Docker смонтировал новую папку."
+              >
+                <Input placeholder="/Users/<user>/team-exchange или C:\\team-exchange" prefix={<SwapOutlined />} />
+              </Form.Item>
+              <Form.Item name="syncthing_ready" valuePropName="checked">
+                <Checkbox>Syncthing установлен и эта папка уже синхронизируется между ноутбуками аналитиков</Checkbox>
+              </Form.Item>
+              <Space size={16} align="start" style={{ width: '100%' }}>
+                <Form.Item name="exchange_auto_scan" valuePropName="checked" style={{ marginBottom: 0 }}>
+                  <Checkbox>Автоматически проверять папку обмена на новые bundle-пакеты</Checkbox>
+                </Form.Item>
+                <Form.Item label="Интервал опроса, сек" name="exchange_poll_interval_sec">
+                  <InputNumber min={15} max={600} step={15} style={{ width: 140 }} />
+                </Form.Item>
+              </Space>
+
+              {snapshot?.exchange ? (
+                <Alert
+                  style={{ marginBottom: 16 }}
+                  type={snapshot.exchange.status === 'ready' ? 'success' : snapshot.exchange.requires_restart ? 'warning' : 'info'}
+                  showIcon
+                  message={
+                    snapshot.exchange.status === 'ready'
+                      ? 'Папка обмена подключена'
+                      : snapshot.exchange.requires_restart
+                        ? 'Путь обновлён, нужен перезапуск стека'
+                        : 'Папка обмена ещё не доведена до рабочего состояния'
+                  }
+                  description={
+                    snapshot.exchange.status === 'ready'
+                      ? `Сейчас сервис смотрит в ${snapshot.exchange.mounted_path} и видит ${snapshot.exchange.total_bundles_count} bundle-пакетов.`
+                      : snapshot.exchange.requires_restart
+                        ? `Сохранён новый путь ${snapshot.exchange.configured_path}, но сервис всё ещё подключён к ${snapshot.exchange.mounted_path}. После ./start.command всё переключится на новый каталог.`
+                        : `Текущая смонтированная папка: ${snapshot.exchange.mounted_path}. Когда подключишь Syncthing и укажешь рабочий путь, здесь появятся статусы новых обновлений.`
+                  }
+                />
+              ) : null}
+
+              <Typography.Title level={5}>4. Рекомендация по модели</Typography.Title>
               <Typography.Paragraph type="secondary">
                 Этот выбор влияет не только на подсказки, но и на то, какие модели будут считаться обязательными. При загрузке в разделе «Модели и контекст» будут скачиваться только модели выбранного профиля.
               </Typography.Paragraph>
@@ -173,13 +227,19 @@ export default function EnvironmentPage() {
                 <Descriptions.Item label="Переход в power mode">
                   <Typography.Text code>{snapshot?.commands.power_mode || './power-mode.command <task-id>'}</Typography.Text>
                 </Descriptions.Item>
+                <Descriptions.Item label="Инструкция по обмену">
+                  <Typography.Text code>{snapshot?.exchange.doc_path || 'docs/team-exchange.md'}</Typography.Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Рекомендуемый diff">
+                  <Typography.Text>{snapshot?.exchange.recommended_diff_tool.title || 'VS Code Compare'}</Typography.Text>
+                </Descriptions.Item>
               </Descriptions>
 
               <Alert
                 type="info"
                 showIcon
                 message="Подсказка по роли этого экрана"
-                description="Здесь настраивается рабочее окружение аналитика. Шаблоны и служебные изменения остаются отдельным уровнем и не мешают обычному сценарию подготовки статьи."
+                description="Здесь настраивается рабочее окружение аналитика: Confluence, VS Code, Continue, Syncthing, папка обмена и модельный профиль. Шаблоны и общий контекст потом живут в локальных папках и публикуются отдельными bundle-пакетами."
               />
 
               <List
@@ -195,6 +255,20 @@ export default function EnvironmentPage() {
                   </List.Item>
                 )}
               />
+
+              {snapshot?.exchange ? (
+                <ProCard type="inner" title="Командный обмен">
+                  <Typography.Paragraph style={{ marginBottom: 8 }}>
+                    Текущий путь: <Typography.Text code>{snapshot.exchange.configured_path}</Typography.Text>
+                  </Typography.Paragraph>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                    {snapshot.exchange.recommended_diff_tool.description}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                    Новых пакетов в обмене: {snapshot.exchange.new_bundles_count}. Источник изменений — папки `docs/shared-context`, `docs/templates`, `docs/glossary`.
+                  </Typography.Paragraph>
+                </ProCard>
+              ) : null}
 
                       {selectedProfile ? (
                         <ProCard type="inner" title={selectedProfile.title}>
@@ -224,6 +298,7 @@ export default function EnvironmentPage() {
           <List
             dataSource={[
               'Открой «Модели и контекст» и проверь, что обязательные модели скачаны. Если нет, там же будет кнопка загрузки и прогресс.',
+              'Если работаешь в команде без сервера, настрой папку обмена и Syncthing, затем открой «Обмен контекстом». Там можно публиковать свои bundle-пакеты и забирать обновления коллег.',
               'Переходи в «Подготовка статьи» только после того, как шаги выше стали зелёными. Иначе UI осознанно не пустит дальше.',
               'Когда статья будет собрана и готов handoff, забирай задачу в VS Code через `./power-mode.command <task-id>` и дорабатывай результат уже в Continue.',
             ]}
@@ -252,6 +327,7 @@ export default function EnvironmentPage() {
                 dataSource={[
                   'Установи Docker Desktop и убедись, что локальные контейнеры проекта могут запускаться.',
                   'Установи Ollama. Именно он будет держать локальные модели, которые используются в UI и в Continue.',
+                  'Установи Syncthing, если хочешь обмениваться контекстом с коллегами без сервера и без git.',
                   'Затем открой раздел «Модели и контекст» и скачай недостающие модели. Для более слабой машины выбирай лёгкий или стандартный профиль, для мощного Mac можно оставлять тяжёлый.',
                 ]}
                 renderItem={(item) => <List.Item>{item}</List.Item>}
@@ -419,7 +495,20 @@ export default function EnvironmentPage() {
               ) : null}
             </ProCard>
 
-            <ProCard type="inner" title="3. Как работать после handoff">
+            <ProCard type="inner" title="3. Подготовить командный обмен через Syncthing">
+              <List
+                dataSource={[
+                  'Установи Syncthing на каждую машину аналитика.',
+                  'Создай папку обмена, например `/Users/<user>/team-exchange` на macOS или `C:\\team-exchange` на Windows.',
+                  'Подключи эту папку в Syncthing на всех машинах, между которыми нужен обмен контекстом.',
+                  'Укажи этот путь выше в поле «Путь к папке обмена», сохрани настройки и перезапусти стек через `./start.command`.',
+                  'Для разбора incoming-файлов используем один рекомендуемый инструмент: встроенный `VS Code Compare`, отдельный diff-клиент не нужен.',
+                ]}
+                renderItem={(item) => <List.Item>{item}</List.Item>}
+              />
+            </ProCard>
+
+            <ProCard type="inner" title="4. Как работать после handoff">
               <List
                 dataSource={[
                   'Сначала собери задачу в UI: task.md, контекст, draft, gaps, refine.',

@@ -19,6 +19,7 @@ from app.confluence import (
     import_confluence_urls,
     save_analyst_profile,
 )
+from app.exchange_api import router as exchange_router
 from app.ingest import reindex_all_documents
 from app.environment_api import router as environment_router
 from app.operations import control_containers, get_operations_status, start_models_pull
@@ -41,6 +42,7 @@ from app.workflow import (
 
 app = FastAPI(title="Analytics RAG Service", version="0.3.0")
 app.include_router(environment_router)
+app.include_router(exchange_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

@@ -54,6 +54,8 @@ services:
       HOST_OS_NAME: ${HOST_OS_NAME:-unknown}
       CONTINUE_CONFIG_HOST_PATH_LABEL: ${CONTINUE_CONFIG_HOST_PATH_LABEL:-}
       CONTINUE_CONFIG_ROOT: /host-continue
+      EXCHANGE_ROOT: /data/team-exchange
+      EXCHANGE_HOST_PATH_LABEL: ${TEAM_EXCHANGE_HOST_PATH_LABEL:-./storage/team-exchange}
     volumes:
       - ./docs:/data/docs
       - ./tasks:/data/tasks
@@ -61,6 +63,7 @@ services:
       - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock
       - ${CONTINUE_CONFIG_HOST_DIR:-./storage/continue-empty}:/host-continue:ro
+      - ${TEAM_EXCHANGE_HOST_DIR:-./storage/team-exchange}:/data/team-exchange
 
   frontend:
     build:

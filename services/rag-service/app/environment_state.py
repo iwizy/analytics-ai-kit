@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.confluence import ConfluenceImportError, load_analyst_profile
+from app.exchange import build_exchange_status
 from app.settings import DOCS_ROOT, SERVICE_STORAGE_ROOT
 import yaml
 
@@ -82,8 +83,13 @@ def _defaults() -> dict[str, Any]:
         "confluence_base_url": "",
         "vscode_ready": False,
         "continue_ready": False,
+        "syncthing_ready": False,
         "model_profile": "powerful",
         "optional_models": [],
+        "exchange_folder": "",
+        "exchange_auto_scan": True,
+        "exchange_poll_interval_sec": 60,
+        "diff_tool": "vscode",
         "templates_mode": "power_only",
     }
 
@@ -116,8 +122,12 @@ def save_environment_settings(
     confluence_base_url: str,
     vscode_ready: bool,
     continue_ready: bool,
+    syncthing_ready: bool,
     model_profile: str,
     optional_models: list[str] | None = None,
+    exchange_folder: str = "",
+    exchange_auto_scan: bool = True,
+    exchange_poll_interval_sec: int = 60,
 ) -> dict[str, Any]:
     _ENVIRONMENT_DIR.mkdir(parents=True, exist_ok=True)
     selected_optional = []
@@ -131,8 +141,13 @@ def save_environment_settings(
         "confluence_base_url": confluence_base_url.strip(),
         "vscode_ready": bool(vscode_ready),
         "continue_ready": bool(continue_ready),
+        "syncthing_ready": bool(syncthing_ready),
         "model_profile": model_profile.strip() or "powerful",
         "optional_models": selected_optional,
+        "exchange_folder": exchange_folder.strip(),
+        "exchange_auto_scan": bool(exchange_auto_scan),
+        "exchange_poll_interval_sec": max(15, int(exchange_poll_interval_sec or 60)),
+        "diff_tool": "vscode",
         "templates_mode": "power_only",
     }
     _ENVIRONMENT_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -377,6 +392,12 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         profile_key=str(settings.get("model_profile") or "powerful"),
         optional_catalog=optional_catalog,
     )
+    exchange = build_exchange_status(
+        configured_path=str(settings.get("exchange_folder") or ""),
+        auto_scan=bool(settings.get("exchange_auto_scan", True)),
+        poll_interval_sec=int(settings.get("exchange_poll_interval_sec") or 60),
+        syncthing_ready=bool(settings.get("syncthing_ready")),
+    )
     selected_optional = [item for item in optional_catalog if item["selected"]]
     installed_optional_review_models = [
         item["model"]
@@ -422,6 +443,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         "model_plan": model_plan,
         "optional_models": optional_catalog,
         "continue_config": continue_config,
+        "exchange": exchange,
         "review_models": review_models,
         "readiness": readiness,
         "recommended_profiles": recommended_model_profiles(),

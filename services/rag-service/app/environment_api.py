@@ -16,8 +16,12 @@ class EnvironmentSettingsRequest(BaseModel):
     confluence_password: str = ""
     vscode_ready: bool = False
     continue_ready: bool = False
+    syncthing_ready: bool = False
     model_profile: str = "powerful"
     optional_models: list[str] = []
+    exchange_folder: str = ""
+    exchange_auto_scan: bool = True
+    exchange_poll_interval_sec: int = 60
 
 
 @router.get("/ui/environment-settings")
@@ -40,8 +44,12 @@ def ui_save_environment_settings(request: EnvironmentSettingsRequest) -> dict:
         confluence_base_url=request.confluence_base_url,
         vscode_ready=request.vscode_ready,
         continue_ready=request.continue_ready,
+        syncthing_ready=request.syncthing_ready,
         model_profile=request.model_profile,
         optional_models=request.optional_models,
+        exchange_folder=request.exchange_folder,
+        exchange_auto_scan=request.exchange_auto_scan,
+        exchange_poll_interval_sec=request.exchange_poll_interval_sec,
     )
     operations = get_operations_status()
     return {
