@@ -12,6 +12,14 @@
 
 Для сравнения конфликтных версий рекомендуем не отдельный diff-инструмент, а встроенный `VS Code Compare`.
 
+### Где брать Syncthing
+
+- официальная страница загрузки: [syncthing.net/downloads](https://syncthing.net/downloads/)
+- macOS app bundle: [syncthing-macos](https://github.com/syncthing/syncthing-macos)
+- Windows installer: [Syncthing Windows Setup](https://github.com/Bill-Stewart/SyncthingWindowsSetup)
+
+Сам бинарник `Syncthing` в проект не вшиваем. Причина простая: это отдельное приложение со своим release cycle, и для on-prem установки надёжнее ставить его с официального источника прямо на машину аналитика.
+
 ## Как устроен обмен
 
 У каждого аналитика проект и модели остаются локально. Между аналитиками синхронизируется только отдельная папка обмена, например:

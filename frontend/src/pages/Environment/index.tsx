@@ -496,16 +496,51 @@ export default function EnvironmentPage() {
             </ProCard>
 
             <ProCard type="inner" title="3. Подготовить командный обмен через Syncthing">
-              <List
-                dataSource={[
-                  'Установи Syncthing на каждую машину аналитика.',
-                  'Создай папку обмена, например `/Users/<user>/team-exchange` на macOS или `C:\\team-exchange` на Windows.',
-                  'Подключи эту папку в Syncthing на всех машинах, между которыми нужен обмен контекстом.',
-                  'Укажи этот путь выше в поле «Путь к папке обмена», сохрани настройки и перезапусти стек через `./start.command`.',
-                  'Для разбора incoming-файлов используем один рекомендуемый инструмент: встроенный `VS Code Compare`, отдельный diff-клиент не нужен.',
-                ]}
-                renderItem={(item) => <List.Item>{item}</List.Item>}
-              />
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Как ставить Syncthing"
+                  description={(
+                    <Space direction="vertical" size={8}>
+                      <span>
+                        Официальная страница загрузки:
+                        {' '}
+                        <a href="https://syncthing.net/downloads/" target="_blank" rel="noreferrer">syncthing.net/downloads</a>
+                      </span>
+                      <span>
+                        macOS: лучше начинать с app bundle
+                        {' '}
+                        <a href="https://github.com/syncthing/syncthing-macos" target="_blank" rel="noreferrer">syncthing-macos</a>
+                      </span>
+                      <span>
+                        Windows: лучше начинать с установщика
+                        {' '}
+                        <a href="https://github.com/Bill-Stewart/SyncthingWindowsSetup" target="_blank" rel="noreferrer">Syncthing Windows Setup</a>
+                      </span>
+                    </Space>
+                  )}
+                />
+
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Почему Syncthing не вшит в bundle проекта"
+                  description="Syncthing живёт своим release cycle, а внутри проекта нам важнее держать чистую on-prem схему без сторонних бинарников в репозитории. Поэтому в bundle оставляем инструкции и официальный путь установки, а само приложение ставим отдельно на машину аналитика."
+                />
+
+                <List
+                  dataSource={[
+                    'Установи Syncthing на каждую машину аналитика.',
+                    'После установки открой его web-интерфейс и убедись, что сервис реально запустился.',
+                    'Создай папку обмена, например `/Users/<user>/team-exchange` на macOS или `C:\\team-exchange` на Windows.',
+                    'Подключи эту папку в Syncthing на всех машинах, между которыми нужен обмен контекстом.',
+                    'Укажи этот путь выше в поле «Путь к папке обмена», сохрани настройки и перезапусти стек через `./start.command`.',
+                    'Для разбора incoming-файлов используем один рекомендуемый инструмент: встроенный `VS Code Compare`, отдельный diff-клиент не нужен.',
+                  ]}
+                  renderItem={(item) => <List.Item>{item}</List.Item>}
+                />
+              </Space>
             </ProCard>
 
             <ProCard type="inner" title="4. Как работать после handoff">
