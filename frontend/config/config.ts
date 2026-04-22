@@ -20,5 +20,15 @@ export default defineConfig({
       name: 'Модели и контекст',
       component: '@/pages/ModelsDocs/index.tsx',
     },
+    {
+      path: '/review',
+      name: 'Ревью аналитики',
+      component: '@/pages/Review/index.tsx',
+    },
+    {
+      path: '/exchange',
+      name: 'Обмен контекстом',
+      component: '@/pages/Exchange/index.tsx',
+    },
   ],
 });

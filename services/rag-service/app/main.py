@@ -19,6 +19,7 @@ from app.confluence import (
     import_confluence_urls,
     save_analyst_profile,
 )
+from app.analytics_review import import_review_confluence, run_analytics_review
 from app.exchange_api import router as exchange_router
 from app.ingest import reindex_all_documents
 from app.environment_api import router as environment_router
@@ -59,7 +60,7 @@ app.add_middleware(
 )
 
 UI_HTML_PATH = Path(__file__).resolve().parent / "static" / "ui.html"
-ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs", "handoffs")
+ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs", "handoffs", "review_sources", "analytics_reviews")
 PREVIEW_CHAR_LIMIT = 12000
 
 DEFAULT_TASK_TEMPLATE = """# Задача
@@ -151,6 +152,17 @@ class HandoffRequest(TaskRequest):
     notes: str | None = None
 
 
+class ReviewImportRequest(BaseModel):
+    review_id: str = Field(min_length=1)
+    urls: list[str] = Field(min_length=1)
+
+
+class AnalyticsReviewRequest(BaseModel):
+    review_id: str = Field(min_length=1)
+    document_type: str | None = "auto"
+    model: str | None = None
+
+
 def iso_from_timestamp(timestamp: float) -> str:
     """
     Convert unix timestamp to ISO string.
@@ -220,6 +232,14 @@ def validate_artifact_kind(kind: str) -> str:
     if kind not in ARTIFACT_KINDS:
         raise HTTPException(status_code=400, detail=f"Недопустимый вид артефакта: {kind}")
     return kind
+
+
+def review_source_dir(review_id: str) -> Path:
+    return ARTIFACTS_ROOT / "review_sources" / sanitize_task_id(review_id)
+
+
+def analytics_review_dir(review_id: str) -> Path:
+    return ARTIFACTS_ROOT / "analytics_reviews" / sanitize_task_id(review_id)
 
 
 @app.get("/ui", response_class=HTMLResponse)
@@ -483,6 +503,85 @@ def ui_artifact_file(kind: str, task_id: str, filename: str):
         media_type=media_type,
         filename=safe_name,
     )
+
+
+@app.get("/ui/review-state/{review_id}")
+def ui_review_state(review_id: str) -> dict:
+    """
+    Return analytics review state: loaded sources and generated review artifacts.
+    """
+    safe_review_id = sanitize_task_id(review_id)
+    sources_dir = review_source_dir(safe_review_id)
+    reports_dir = analytics_review_dir(safe_review_id)
+
+    sources = [serialize_file(path) for path in list_regular_files(sources_dir)]
+    report_paths = [path for path in list_regular_files(reports_dir) if path.suffix.lower() == ".md"]
+    reports = [serialize_file(path) for path in report_paths]
+    latest_preview = preview_text(report_paths[0]) if report_paths else ""
+    latest_meta = None
+    meta_files = [path for path in list_regular_files(reports_dir) if path.suffix.lower() == ".json"]
+    if meta_files:
+        latest_meta = read_json(meta_files[0])
+
+    return {
+        "status": "ok",
+        "review_id": safe_review_id,
+        "sources": sources,
+        "artifacts": reports,
+        "latest_preview": latest_preview,
+        "latest_meta": latest_meta,
+    }
+
+
+@app.post("/ui/review-import-confluence")
+def ui_review_import_confluence(request: ReviewImportRequest) -> dict:
+    """
+    Import article source from Confluence into analytics review source storage.
+    """
+    try:
+        result = import_review_confluence(
+            review_id=request.review_id,
+            urls=request.urls,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта статьи из Confluence: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **result,
+    }
+
+
+@app.post("/ui/review-upload/{review_id}")
+async def ui_review_upload(review_id: str, files: list[UploadFile] = File(...)) -> dict:
+    """
+    Upload article source files for analytics review.
+    """
+    safe_review_id = sanitize_task_id(review_id)
+    target_dir = review_source_dir(safe_review_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files: list[str] = []
+    for uploaded in files:
+        original_name = Path(uploaded.filename or "").name
+        if not original_name:
+            raise HTTPException(status_code=400, detail="Файл без имени не поддерживается")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Неподдерживаемый формат файла: {suffix}")
+
+        target_path = target_dir / original_name
+        content = await uploaded.read()
+        target_path.write_bytes(content)
+        saved_files.append(original_name)
+
+    return {
+        "status": "ok",
+        "review_id": safe_review_id,
+        "saved_files": saved_files,
+    }
 
 
 @app.get("/ui/ops/status")
@@ -776,6 +875,28 @@ def gap_analysis_endpoint(request: GapAnalysisRequest) -> dict:
     return {
         "status": "ok",
         "gap_analysis": result,
+    }
+
+
+@app.post("/review-analytics")
+def review_analytics_endpoint(request: AnalyticsReviewRequest) -> dict:
+    """
+    Review finished analytics article against FT/NFT template and consistency expectations.
+    """
+    try:
+        result = run_analytics_review(
+            review_id=request.review_id,
+            document_type=request.document_type,
+            model=request.model,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка ревью аналитики: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "analytics_review": result,
     }
 
 

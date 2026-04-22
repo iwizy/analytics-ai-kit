@@ -1,24 +1,67 @@
 # analytics-ai-kit
 
-Локальная система для системных аналитиков, которая автоматически строит черновики статьи по задаче из `task.md`, подбирает релевантные шаблоны секций, собирает контекст и генерирует `draft` + `gaps` + `refine`.
+Локальная on-prem система для системных аналитиков.
 
-Стек локальный:
+Она помогает:
 
-- Docker Compose
-- Ollama
-- Qdrant
-- rag-service (FastAPI)
-- UI в браузере (`http://localhost:8000/ui`)
-- VS Code + Continue
+- подготовить задачу и контекст,
+- импортировать статьи и документы из Confluence и файлов,
+- собрать `draft + gaps + refine`,
+- подготовить handoff для `VS Code + Continue`,
+- обмениваться общим контекстом между аналитиками без облака и без `git`,
+- проводить отдельное `ревью аналитики` по готовой статье.
 
-Ограничения:
+## Что внутри
 
-- Нет Open WebUI
-- Нет внешних SaaS
-- Код и комментарии на английском
-- Тексты для пользователя и промпты на русском
+- `FastAPI` backend в `services/rag-service`
+- `Ant Design Pro` frontend в `frontend`
+- `Ollama` для локальных моделей
+- `Qdrant` для локального контекстного поиска
+- `Playwright` для чтения закрытого Confluence
+- `VS Code + Continue` для power mode
+- `Syncthing` как рекомендованный транспорт для общей папки обмена
 
-## 1. Обязательная структура репозитория
+## Основные разделы UI
+
+- `Подготовка окружения`
+- `Подготовка статьи`
+- `Модели и контекст`
+- `Ревью аналитики`
+- `Обмен контекстом`
+
+## Быстрый запуск
+
+Запуск:
+
+```bash
+./start.command
+```
+
+Остановка:
+
+```bash
+./stop.command
+```
+
+После запуска:
+
+- backend: [http://localhost:8000](http://localhost:8000)
+- frontend: [http://localhost:3001](http://localhost:3001)
+
+## Что нужно установить на машину аналитика
+
+Обязательно:
+
+- `Docker Desktop`
+- `Ollama`
+- `VS Code`
+- расширение `Continue`
+
+Если нужен обмен между аналитиками без сервера:
+
+- `Syncthing`
+
+## Структура данных проекта
 
 ```text
 tasks/
@@ -31,6 +74,10 @@ artifacts/
   drafts/
   reviews/
   context_packs/
+  handoffs/
+  pipeline_runs/
+  analytics_reviews/
+  review_sources/
 
 docs/
   input/
@@ -38,208 +85,208 @@ docs/
   glossary/
   services/
   templates/
-    sections/
-      ft/
-      nft/
-    prompts/
+  shared-context/
+  continue/
 ```
 
-- `tasks/inbox/<task-id>/task.md` — описание задачи.
-- `tasks/inbox/<task-id>/attachments/` — 1..N вложений (pdf/docx/txt/md).
-- `artifacts/*` — артефакты генерации.
-- `docs/*` — общий контекст системы.
-- `docs/services/<service>/...` — контекст по конкретному микросервису.
+### Что где лежит
 
-## 2. Как быстро запустить стек
+- `tasks/inbox/<task-id>/task.md` — постановка задачи
+- `tasks/inbox/<task-id>/attachments/` — локальные вложения и импортированные страницы Confluence
+- `artifacts/drafts/<task-id>/` — черновики и refine-версии
+- `artifacts/reviews/<task-id>/` — gaps и дополнительное review второго мнения
+- `artifacts/context_packs/<task-id>/` — собранный контекст для секций
+- `artifacts/handoffs/<task-id>/` — handoff в `VS Code + Continue`
+- `artifacts/pipeline_runs/<task-id>/` — статусы pipeline
+- `artifacts/review_sources/<review-id>/` — источники для отдельного ревью статьи
+- `artifacts/analytics_reviews/<review-id>/` — отчёты `Ревью аналитики`
+- `docs/shared-context/` — общий контекст, который можно публиковать коллегам через обмен
+- `docs/templates/` — шаблоны секций и промпты
+
+## Подготовка окружения
+
+В разделе `Подготовка окружения` настраиваются:
+
+- `Base URL Confluence`
+- логин и пароль Confluence
+- готовность `VS Code`
+- готовность `Continue`
+- готовность `Syncthing`
+- путь к папке обмена
+- профиль производительности машины
+- дополнительные модели для ревью
+
+### Continue
+
+Репозиторный шаблон конфига:
+
+- [docs/continue/config.template.yaml](/Users/iwizard/Dev/analytics-ai-kit/docs/continue/config.template.yaml)
+
+Ожидаемые пути:
+
+- macOS: `~/.continue/config.yaml`
+- Windows: `%USERPROFILE%\.continue\config.yaml`
+
+Для слабых машин используется `gemma4:e2b`, для стандартного профиля `qwen2.5-coder:14b`, для мощного — `qwen3-coder:30b`.
+
+## Подготовка статьи
+
+Раздел `Подготовка статьи` ведёт аналитика по шагам:
+
+1. указать `Task ID`
+2. подложить и сохранить `task.md`
+3. добавить контекст файлами или ссылками
+4. запустить `Analyze`
+5. собрать `Draft`
+6. найти `Gaps`
+7. сделать `Refine`
+8. подготовить `handoff`
+
+### Источники
+
+Поддерживаются:
+
+- `.md`
+- `.txt`
+- `.docx`
+- `.pdf`
+- ссылки Confluence
+
+Импортированные ссылки сохраняются локально как `.md` в `attachments`.
+
+## Ревью аналитики
+
+Раздел `Ревью аналитики` — это отдельный режим проверки уже готовой статьи.
+
+Что умеет:
+
+- принять статью файлом или ссылкой Confluence
+- определить `FT` или `NFT` автоматически или взять тип вручную
+- проверить соответствие шаблону
+- найти противоречия
+- найти недоработки и слабые разделы
+- выдать рекомендации по доработке
+
+Артефакты:
+
+- `artifacts/review_sources/<review-id>/` — загруженные источники
+- `artifacts/analytics_reviews/<review-id>/` — итоговые markdown-отчёты ревью
+
+Подробности:
+
+- [docs/review-analytics.md](/Users/iwizard/Dev/analytics-ai-kit/docs/review-analytics.md)
+
+## Обмен контекстом без облака и без git
+
+Раздел `Обмен контекстом` работает через отдельную папку обмена.
+
+Рекомендуемая схема:
+
+- `Syncthing` синхронизирует только папку обмена
+- система публикует туда immutable `bundle`-пакеты
+- коллеги видят новые пакеты и забирают их к себе кнопкой
+
+Что публикуется:
+
+- `docs/shared-context`
+- `docs/templates`
+- `docs/glossary`
+
+Что не публикуется:
+
+- секреты
+- `Playwright` state
+- `.continue/config.yaml`
+- модели `Ollama`
+- временные рабочие файлы
+
+Подробности:
+
+- [docs/team-exchange.md](/Users/iwizard/Dev/analytics-ai-kit/docs/team-exchange.md)
+
+## Модели
+
+### Профили производительности
+
+`Лёгкий`
+
+- обязательные: `nomic-embed-text`, `gemma4:e2b`
+
+`Стандартный`
+
+- обязательные: `nomic-embed-text`, `qwen2.5:7b`, `qwen2.5-coder:14b`
+
+`Мощный`
+
+- обязательные: `nomic-embed-text`, `qwen2.5:7b`, `qwen3-coder:30b`
+
+### Дополнительные модели
+
+Сейчас опционально поддерживается:
+
+- `gpt-oss:20b`
+
+Она нужна как второе мнение и дополнительная review-модель.
+
+## Power mode
+
+Когда UI уже подготовил задачу и handoff:
 
 ```bash
-docker compose up -d --build
+./power-mode.command <task-id>
 ```
 
-```bash
-./scripts/pull-models.sh
-```
+Дальше аналитик работает в `VS Code + Continue` поверх созданной рабочей копии.
 
-```bash
-./scripts/reindex.sh
-```
+## Основные endpoints
 
-```bash
-./scripts/healthcheck.sh
-```
-
-После этого UI должен открыться по `http://localhost:8000/ui`.
-
-## 3. Установка и конфиг Continue
-
-1. Установите в VS Code расширение **Continue**.
-2. Откройте `Continue: Open Config File`.
-3. Добавьте блок конфигурации моделей:
-
-```yaml
-models:
-  - name: qwen3-coder-30b
-    provider: ollama
-    model: qwen3-coder:30b
-    apiBase: http://127.0.0.1:11434
-  - name: qwen2.5-7b
-    provider: ollama
-    model: qwen2.5:7b
-    apiBase: http://127.0.0.1:11434
-  - name: gpt-oss-20b
-    provider: ollama
-    model: gpt-oss:20b
-    apiBase: http://127.0.0.1:11434
-
-context:
-  - provider: code
-  - provider: docs
-  - provider: folder
-```
-
-## 4. Как начать работу над новой статьей (без CLI)
-
-### Шаг 1. Подготовить задачу
-
-1. Откройте `http://localhost:8000/ui`.
-2. Укажите `Task ID` (например, `operation-history-ft-v1`).
-3. Нажмите `Загрузить шаблон task.md`.
-4. Заполните минимум 5 блоков:
-   - цель и ожидаемый результат,
-   - бизнес-контекст,
-   - исходные документы сервиса,
-   - ограничения,
-   - критерий готовности.
-
-### Шаг 2. Подготовить контекст (микросервисно)
-
-Система лучше работает, когда исходники есть в двух местах:
-
-- task-контекст: `tasks/inbox/<task-id>/task.md` + `attachments/`
-- микросервисный контекст: `docs/services/<service>/...`
-
-Рекомендуемая вложенная структура для сервиса:
-
-```text
-docs/services/operation-history/
-  00_service_overview.md
-  20_business_requirements.md
-  90_functional_requirements.md
-  42_internal_integrations.md
-  41_external_integrations.md
-  50_non_functional_requirements.md
-  63_kafka_topics.md
-  80_deployment_scheme.md
-```
-
-Эти файлы можно быстро скопировать из `docs/templates/microservice/` и заполнить.
-
-Вложения можно добавить через UI (`Attachments`) или напрямую в папку `tasks/inbox/<task-id>/attachments/`.
-
-### Шаг 3. Проверить инфраструктуру
-
-Нажмите в блоке `Operations`:
-
-- `Update/Обновить Ops статус` — проверить Docker + сервисы + модели,
-- `Скачать обязательные модели` — задать прогресс загрузки,
-- `Запустить стек`/`Перезапустить стек`/`Остановить стек` — управление контейнерами (`qdrant`, `ollama`, `rag-service`).
-
-### Шаг 4. Получить черновой draft
-
-1. Нажмите `Create draft`.
-2. При необходимости задайте `Тип документа` (`auto/ft/nft`).
-3. Система:
-   - анализирует задачу,
-   - определяет тип и секции,
-   - собирает `context pack` для каждой секции,
-   - генерирует текст секционно,
-   - собирает итоговый документ.
-4. Артефакт сохранится в:
-
-```text
-artifacts/drafts/<task-id>/<timestamp>_draft_<ft|nft>.md
-```
-
-### Шаг 5. Получить gaps / вопросы
-
-Нажмите `Gap analysis`.
-
-Результат будет в:
-
-```text
-artifacts/reviews/<task-id>/<timestamp>_gaps.md
-```
-
-### Шаг 6. Refine
-
-1. Заполните `Инструкции для refine`.
-2. Нажмите `Refine draft`.
-3. Система создаст новый refinement-файл и не перезатрёт предыдущий draft.
-
-### Шаг 7. Полный pipeline в одном клике
-
-`Run full pipeline` запускает все этапы последовательно:
-- analyze
-- draft
-- gaps (по флагу `Запустить gap-analysis`)
-- refine (по флагу `Запустить refine`)
-- finalize
-
-По завершению показывается прогресс и список артефактов.
-
-### Шаг 8. Что именно делает система под капотом
-
-- `task.md`, `docs/input`, `docs/examples`, `docs/glossary`, `docs/services/<service>` и `attachments` — это уровни контекста.
-- Для каждого раздела выбирается отдельный шаблон секции.
-- `context pack` собирается автоматически и хранится в `artifacts/context_packs/<task-id>/`.
-- Генерация идёт секционно, без ручного выбора шаблонов и без ручного поиска контекста.
-
-## 5. Поддержка PDF
-
-Да, PDF как источник поддерживается:
-- извлечение текста идёт на стороне rag-service через `pymupdf`.
-- поддерживаемые расширения: `.md`, `.txt`, `.docx`, `.pdf`.
-
-## 6. Scripts (для автотестирования и редких ручных запусков)
-
-```bash
-./scripts/analyze_task.sh <task-id>
-./scripts/create_draft.sh <task-id> [ft|nft]
-./scripts/gap_analysis.sh <task-id> [draft-path]
-./scripts/refine_draft.sh <task-id> "Уточни ..."
-./scripts/run_pipeline.sh <task-id> --wait
-```
-
-## 7. Endpoints
+Базовые:
 
 - `GET /health`
-- `POST /search`
 - `POST /reindex`
-- `POST /analyze-task`
-- `POST /build-context-pack`
-- `POST /draft`
-- `POST /gap-analysis`
-- `POST /refine`
-- `POST /run-pipeline`
-- `GET /pipeline-status/{task_id}/{run_id}`
-- `GET /ui`
+- `POST /search`
+
+По статье:
+
 - `GET /ui/task-template`
 - `POST /ui/create-task`
 - `POST /ui/upload-attachments/{task_id}`
+- `POST /ui/import-confluence`
 - `GET /ui/state/{task_id}`
-- `GET /ui/artifacts/{kind}/{task_id}/{filename}`
+- `POST /analyze-task`
+- `POST /draft`
+- `POST /gap-analysis`
+- `POST /refine`
+- `POST /prepare-handoff`
+- `POST /run-pipeline`
+- `GET /pipeline-status/{task_id}/{run_id}`
+
+По ревью аналитики:
+
+- `GET /ui/review-state/{review_id}`
+- `POST /ui/review-upload/{review_id}`
+- `POST /ui/review-import-confluence`
+- `POST /review-analytics`
+
+По окружению и обмену:
+
+- `GET /ui/environment-settings`
+- `POST /ui/environment-settings`
+- `GET /ui/exchange/status`
+- `POST /ui/exchange/scan`
+- `POST /ui/exchange/publish`
+- `POST /ui/exchange/import`
+
+По ops:
+
 - `GET /ui/ops/status`
-- `POST /ui/ops/containers/{action}` (`start|stop|restart`)
+- `POST /ui/ops/containers/{action}`
 - `POST /ui/ops/models/pull`
 - `GET /ui/ops/models/status`
 
-## 8. Шаблоны и промпты
+## Полезные документы
 
-- `tasks/task.md.template` — минимальный шаблон для `task.md`.
-- `docs/templates/sections/ft/*` — секционные шаблоны FT.
-- `docs/templates/sections/nft/*` — секционные шаблоны NFT.
-- `docs/templates/prompts/draft_ft.md` — промпт для секций FT.
-- `docs/templates/prompts/draft_nft.md` — промпт для секций NFT.
-- `docs/templates/prompts/gap_finder.md` — промпт для gap-анализa.
-- `docs/templates/prompts/refine.md` — промпт для refine.
-- `docs/templates/microservice/*` — шаблоны для микросервисного набора документов.
+- [docs/continue/config.template.yaml](/Users/iwizard/Dev/analytics-ai-kit/docs/continue/config.template.yaml)
+- [docs/team-exchange.md](/Users/iwizard/Dev/analytics-ai-kit/docs/team-exchange.md)
+- [docs/review-analytics.md](/Users/iwizard/Dev/analytics-ai-kit/docs/review-analytics.md)
+- [docs/services/README.md](/Users/iwizard/Dev/analytics-ai-kit/docs/services/README.md)

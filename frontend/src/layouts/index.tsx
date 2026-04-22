@@ -4,6 +4,7 @@ import {
   CheckCircleOutlined,
   DatabaseOutlined,
   FileTextOutlined,
+  ProfileOutlined,
   SettingOutlined,
   StopOutlined,
   SwapOutlined,
@@ -72,6 +73,11 @@ export default function AppLayout() {
       ),
     },
     {
+      key: '/review',
+      icon: <ProfileOutlined />,
+      label: <Link to="/review"><span style={wrappedMenuLabelStyle}>Ревью аналитики</span></Link>,
+    },
+    {
       key: '/exchange',
       icon: <SwapOutlined />,
       label: (
@@ -87,6 +93,8 @@ export default function AppLayout() {
 
   const selectedKey = location.pathname.startsWith('/models-docs')
     ? '/models-docs'
+    : location.pathname.startsWith('/review')
+      ? '/review'
     : location.pathname.startsWith('/exchange')
       ? '/exchange'
     : location.pathname.startsWith('/task')
