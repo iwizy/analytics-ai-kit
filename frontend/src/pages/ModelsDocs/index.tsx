@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircleOutlined, CloudDownloadOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
-import { Alert, Button, List, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, List, Progress, Space, Table, Tag, Typography, message } from 'antd';
 
 import { apiRequest } from '@/utils/api';
 import type { EnvironmentSnapshot } from '@/utils/environment';
@@ -11,6 +11,7 @@ type ModelPullItem = {
   message?: string;
   completed?: number;
   total?: number;
+  progress?: number;
   error?: string;
 };
 
@@ -38,14 +39,65 @@ type OperationsPayload = {
     error?: string;
   };
   model_pull: {
+    running?: boolean;
     status?: string;
-    message?: string;
-    models?: Record<string, ModelPullItem>;
+    requested_models?: string[];
+    per_model?: Record<string, ModelPullItem>;
+    logs?: string[];
   };
 };
 
+function terminalProgress(item?: ModelPullItem) {
+  if (!item) {
+    return 0;
+  }
+  if (typeof item.progress === 'number') {
+    return Math.min(Math.max(item.progress, 0), 1);
+  }
+  if (item.status === 'done' || item.status === 'skipped' || item.status === 'failed') {
+    return 1;
+  }
+  return 0;
+}
+
+function formatBytes(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function renderPullMessage(item?: ModelPullItem) {
+  if (!item) {
+    return '';
+  }
+  if (item.error) {
+    return item.error;
+  }
+  if (typeof item.completed === 'number' && typeof item.total === 'number' && item.total > 0) {
+    return `${item.message || 'Скачивание'} · ${formatBytes(item.completed)} из ${formatBytes(item.total)}`;
+  }
+  if (item.status === 'done') {
+    return 'Модель скачана и готова к работе';
+  }
+  if (item.status === 'skipped') {
+    return 'Модель уже была скачана раньше';
+  }
+  if (item.status === 'failed') {
+    return 'Загрузка завершилась ошибкой';
+  }
+  return item.message || 'Статус обновляется';
+}
+
 function renderModelStatus(model: string, operations: OperationsPayload | null, readyModels: Set<string>) {
-  const modelPull = operations?.model_pull?.models?.[model];
+  const modelPull = operations?.model_pull?.per_model?.[model];
   if (readyModels.has(model)) {
     return <Tag color="success">Готово</Tag>;
   }
@@ -76,6 +128,18 @@ export default function ModelsDocsPage() {
     void refreshAll();
   }, []);
 
+  useEffect(() => {
+    if (!operations?.model_pull?.running) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshAll();
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [operations?.model_pull?.running]);
+
   const activeModels = useMemo(() => environment?.model_plan.required_models || [], [environment]);
   const deferredModels = useMemo(() => environment?.model_plan.deferred_models || [], [environment]);
   const selectedOptionalModels = useMemo(
@@ -88,6 +152,36 @@ export default function ModelsDocsPage() {
   );
   const missingModels = useMemo(() => environment?.model_plan.missing_models || [], [environment]);
   const readyModels = useMemo(() => new Set(environment?.model_plan.ready_models || []), [environment]);
+  const pullStates = useMemo(() => operations?.model_pull?.per_model || {}, [operations]);
+  const requestedModels = useMemo(() => operations?.model_pull?.requested_models || [], [operations]);
+  const pullLogs = useMemo(() => operations?.model_pull?.logs || [], [operations]);
+  const activePullSummary = useMemo(() => {
+    if (!requestedModels.length) {
+      return null;
+    }
+    const total = requestedModels.length;
+    let completed = 0;
+    let failed = 0;
+
+    requestedModels.forEach((model) => {
+      const item = pullStates[model];
+      if (item?.status === 'failed') {
+        failed += 1;
+      }
+      if (item?.status === 'done' || item?.status === 'skipped' || item?.status === 'failed') {
+        completed += 1;
+      }
+    });
+
+    const ratio = requestedModels.reduce((sum, model) => sum + terminalProgress(pullStates[model]), 0) / total;
+    return {
+      total,
+      completed,
+      failed,
+      percent: Math.round(ratio * 100),
+      latestLog: pullLogs.length ? pullLogs[pullLogs.length - 1] : '',
+    };
+  }, [pullLogs, pullStates, requestedModels]);
 
   async function controlContainers(action: 'start' | 'restart' | 'stop') {
     setBusyAction(action);
@@ -194,11 +288,40 @@ export default function ModelsDocsPage() {
             <Typography.Paragraph>
               Для текущего профиля производительности обязательными считаются только его модели. При нажатии кнопки будут скачиваться только они, а остальные останутся как «понадобятся позже при смене профиля».
             </Typography.Paragraph>
+            {activePullSummary ? (
+              <Alert
+                type={operations?.model_pull?.status === 'failed' ? 'error' : operations?.model_pull?.running ? 'info' : 'success'}
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={operations?.model_pull?.running ? 'Идёт загрузка моделей' : operations?.model_pull?.status === 'failed' ? 'Загрузка завершилась с ошибками' : 'Загрузка моделей завершена'}
+                description={(
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Progress
+                      percent={activePullSummary.percent}
+                      status={operations?.model_pull?.status === 'failed' ? 'exception' : operations?.model_pull?.running ? 'active' : 'success'}
+                    />
+                    <Typography.Text type="secondary">
+                      Завершено: {activePullSummary.completed} из {activePullSummary.total}
+                      {activePullSummary.failed ? ` · Ошибок: ${activePullSummary.failed}` : ''}
+                    </Typography.Text>
+                    {activePullSummary.latestLog ? (
+                      <Typography.Text type="secondary">
+                        Последнее событие: {activePullSummary.latestLog}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
+                )}
+              />
+            ) : null}
             <List
               dataSource={activeModels}
               renderItem={(model) => {
-                const pullState = operations?.model_pull?.models?.[model];
-                const progress = pullState?.total ? `${pullState.completed || 0}/${pullState.total}` : null;
+                const pullState = operations?.model_pull?.per_model?.[model];
+                const percent = typeof pullState?.progress === 'number'
+                  ? Math.round(pullState.progress * 100)
+                  : pullState?.status === 'done' || pullState?.status === 'skipped'
+                    ? 100
+                    : undefined;
                 return (
                   <List.Item>
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -207,9 +330,17 @@ export default function ModelsDocsPage() {
                         {renderModelStatus(model, operations, readyModels)}
                       </Space>
                       <Typography.Text type="secondary">
-                        {pullState?.error || pullState?.message || (missingModels.includes(model) ? 'Модель ещё не скачана для текущего профиля' : readyModels.has(model) ? 'Модель готова к работе' : 'Статус обновляется')}
+                        {pullState
+                          ? renderPullMessage(pullState)
+                          : (missingModels.includes(model) ? 'Модель ещё не скачана для текущего профиля' : readyModels.has(model) ? 'Модель готова к работе' : 'Статус обновляется')}
                       </Typography.Text>
-                      {progress ? <Typography.Text type="secondary">Прогресс: {progress}</Typography.Text> : null}
+                      {typeof percent === 'number' ? (
+                        <Progress
+                          percent={percent}
+                          size="small"
+                          status={pullState?.status === 'failed' ? 'exception' : percent === 100 ? 'success' : 'active'}
+                        />
+                      ) : null}
                     </Space>
                   </List.Item>
                 );
@@ -237,20 +368,45 @@ export default function ModelsDocsPage() {
           <List
             dataSource={selectedOptionalModels}
             locale={{ emptyText: 'Пока не выбрано ни одной дополнительной модели в подготовке окружения.' }}
-            renderItem={(item) => (
-              <List.Item
-                actions={[
-                  <Tag key="state" color={item.installed ? 'success' : 'default'}>
-                    {item.installed ? 'Скачана' : 'Не скачана'}
-                  </Tag>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={item.title}
-                  description={item.description}
-                />
-              </List.Item>
-            )}
+            renderItem={(item) => {
+              const pullState = operations?.model_pull?.per_model?.[item.model];
+              const percent = typeof pullState?.progress === 'number'
+                ? Math.round(pullState.progress * 100)
+                : pullState?.status === 'done' || pullState?.status === 'skipped'
+                  ? 100
+                  : undefined;
+              const tagColor = item.installed ? 'success' : pullState?.status === 'failed' ? 'error' : pullState?.status ? 'processing' : 'default';
+              const tagLabel = item.installed ? 'Скачана' : pullState?.status === 'failed' ? 'Ошибка загрузки' : pullState?.status ? 'Скачивается' : 'Не скачана';
+
+              return (
+                <List.Item
+                  actions={[
+                    <Tag key="state" color={tagColor}>
+                      {tagLabel}
+                    </Tag>,
+                  ]}
+                >
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <List.Item.Meta
+                      title={item.title}
+                      description={item.description}
+                    />
+                    {pullState ? (
+                      <Typography.Text type="secondary">
+                        {renderPullMessage(pullState)}
+                      </Typography.Text>
+                    ) : null}
+                    {typeof percent === 'number' ? (
+                      <Progress
+                        percent={percent}
+                        size="small"
+                        status={pullState?.status === 'failed' ? 'exception' : percent === 100 ? 'success' : 'active'}
+                      />
+                    ) : null}
+                  </Space>
+                </List.Item>
+              );
+            }}
           />
           <Space style={{ marginTop: 16 }} wrap>
             <Button
