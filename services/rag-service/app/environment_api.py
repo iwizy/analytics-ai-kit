@@ -39,7 +39,11 @@ def ui_save_environment_settings(request: EnvironmentSettingsRequest) -> dict:
     login = request.confluence_login.strip() or str(existing_profile.get("login") or "")
     password = request.confluence_password or str(existing_profile.get("password") or "")
     if login and password:
-        save_analyst_profile(DEFAULT_ANALYST_ID, login, password)
+        save_analyst_profile(
+            analyst_id=DEFAULT_ANALYST_ID,
+            login=login,
+            password=password,
+        )
     save_environment_settings(
         confluence_base_url=request.confluence_base_url,
         confluence_login=request.confluence_login,
