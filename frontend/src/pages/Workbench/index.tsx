@@ -50,7 +50,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 
         type TaskState = {
           task_id: string;
-          task_content: string;
+          task_text?: string;
+          task_content?: string;
           attachments: FileMeta[];
           analysis?: AnalysisPayload | null;
           artifacts?: Record<string, FileMeta[]>;
@@ -63,10 +64,28 @@ import React, { useEffect, useMemo, useState } from 'react';
         };
 
         type SourceMode = 'files' | 'links' | 'both';
-        type BusyKey = 'template' | 'save' | 'links' | 'analyze' | 'draft' | 'gap' | 'review' | 'refine' | 'pipeline' | 'handoff' | null;
+        type BusyKey = 'template' | 'save' | 'links' | 'documents' | 'analyze' | 'draft' | 'gap' | 'review' | 'refine' | 'pipeline' | 'handoff' | null;
+
+        type GenerationTarget = {
+          id: string;
+          title: string;
+          description?: string;
+          template?: string;
+        };
+
+        type GenerationPreset = {
+          id: string;
+          title: string;
+          description?: string;
+          targets: string[];
+        };
 
         export default function WorkbenchPage() {
           const [environment, setEnvironment] = useState<EnvironmentSnapshot | null>(null);
+          const [generationTargets, setGenerationTargets] = useState<GenerationTarget[]>([]);
+          const [generationPresets, setGenerationPresets] = useState<GenerationPreset[]>([]);
+          const [selectedPreset, setSelectedPreset] = useState('feature');
+          const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
           const [taskId, setTaskId] = useState('');
           const [taskContent, setTaskContent] = useState('');
           const [confluenceUrls, setConfluenceUrls] = useState('');
@@ -91,6 +110,20 @@ import React, { useEffect, useMemo, useState } from 'react';
             setEnvironment(payload);
           }
 
+          async function loadGenerationTargets() {
+            const payload = await apiRequest<{
+              targets: GenerationTarget[];
+              presets: GenerationPreset[];
+            }>('/ui/generation-targets');
+            setGenerationTargets(payload.targets || []);
+            setGenerationPresets(payload.presets || []);
+            const defaultPreset = (payload.presets || []).find((item) => item.id === 'feature') || payload.presets?.[0];
+            if (!selectedTargets.length && defaultPreset) {
+              setSelectedPreset(defaultPreset.id);
+              setSelectedTargets(defaultPreset.targets);
+            }
+          }
+
           async function loadTaskState(targetTaskId: string) {
             if (!targetTaskId) {
               setTaskState(null);
@@ -98,11 +131,12 @@ import React, { useEffect, useMemo, useState } from 'react';
             }
             const payload = await apiRequest<TaskState>(`/ui/state/${encodeURIComponent(targetTaskId)}`);
             setTaskState(payload);
-            setTaskContent(payload.task_content || '');
+            setTaskContent(payload.task_text || payload.task_content || '');
           }
 
           useEffect(() => {
             void loadEnvironment();
+            void loadGenerationTargets();
           }, []);
 
           useEffect(() => {
@@ -153,9 +187,17 @@ import React, { useEffect, useMemo, useState } from 'react';
             await withBusy('save', async () => {
               await apiRequest('/ui/create-task', {
                 method: 'POST',
-                body: JSON.stringify({ task_id: currentTaskId, content: taskContent }),
+                body: JSON.stringify({ task_id: currentTaskId, task_text: taskContent }),
               });
             }, 'task.md сохранён');
+          }
+
+          function applyPreset(presetId: string) {
+            setSelectedPreset(presetId);
+            const preset = generationPresets.find((item) => item.id === presetId);
+            if (preset) {
+              setSelectedTargets(preset.targets);
+            }
           }
 
           async function importConfluenceLinks() {
@@ -237,6 +279,23 @@ import React, { useEffect, useMemo, useState } from 'react';
                 body: JSON.stringify({ task_id: currentTaskId }),
               });
             }, 'Первый черновик собран');
+          }
+
+          async function runGenerateDocuments() {
+            if (!currentTaskId) {
+              message.error('Сначала укажи Task ID');
+              return;
+            }
+            if (!selectedTargets.length) {
+              message.error('Выбери хотя бы один документ');
+              return;
+            }
+            await withBusy('documents', async () => {
+              await apiRequest('/ui/generate-documents', {
+                method: 'POST',
+                body: JSON.stringify({ task_id: currentTaskId, targets: selectedTargets }),
+              });
+            }, 'Выбранные документы сгенерированы');
           }
 
           async function runGapAnalysis() {
@@ -448,12 +507,64 @@ import React, { useEffect, useMemo, useState } from 'react';
                   </Space>
                 </ProCard>
 
-                <ProCard title="Шаг 3. Генерация документа" bordered>
+                <ProCard title="Шаг 3. Что нужно сгенерировать" bordered>
                   <Alert
                     type="info"
                     showIcon
-                    message="FT и NFT"
-                    description="FT — функциональные требования, то есть что система должна делать. NFT — нефункциональные требования: производительность, надёжность, безопасность, ограничения среды и подобные характеристики."
+                    message="Теперь можно генерировать не только FT или NFT"
+                    description="Выбери пресет или отметь документы вручную. Система создаст отдельный Markdown-файл на каждый выбранный документ и общий index-файл комплекта."
+                  />
+                  <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 16 }}>
+                    <Select
+                      value={selectedPreset || undefined}
+                      onChange={applyPreset}
+                      options={generationPresets.map((preset) => ({
+                        label: preset.title,
+                        value: preset.id,
+                      }))}
+                      placeholder="Выбери пресет"
+                    />
+                    {selectedPreset ? (
+                      <Typography.Text type="secondary">
+                        {generationPresets.find((item) => item.id === selectedPreset)?.description || ''}
+                      </Typography.Text>
+                    ) : null}
+                    <Checkbox.Group
+                      value={selectedTargets}
+                      onChange={(values) => {
+                        setSelectedTargets(values.map(String));
+                        setSelectedPreset('');
+                      }}
+                      style={{ width: '100%' }}
+                    >
+                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                        {generationTargets.map((target) => (
+                          <Checkbox key={target.id} value={target.id}>
+                            <Space direction="vertical" size={0}>
+                              <Typography.Text strong>{target.title}</Typography.Text>
+                              <Typography.Text type="secondary">{target.description || target.template || target.id}</Typography.Text>
+                            </Space>
+                          </Checkbox>
+                        ))}
+                      </Space>
+                    </Checkbox.Group>
+                    <Space wrap>
+                      <Button type="primary" loading={busyKey === 'documents'} onClick={() => void runGenerateDocuments()}>
+                        Сгенерировать выбранное
+                      </Button>
+                      <Typography.Text type="secondary">
+                        Выбрано документов: {selectedTargets.length}
+                      </Typography.Text>
+                    </Space>
+                  </Space>
+                </ProCard>
+
+                <ProCard title="Шаг 3.1. Быстрые действия по текущему черновику" bordered>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Draft, Gaps и Refine"
+                    description="Эти действия оставлены для короткого пути: быстро собрать один черновик, найти пробелы, доработать текст и подготовить handoff."
                   />
                   <List
                     style={{ marginTop: 16 }}

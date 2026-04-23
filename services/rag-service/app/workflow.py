@@ -13,6 +13,8 @@ from typing import Any
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import yaml
+
 from app.chunking import chunk_text
 from app.documents import collect_supported_files, extract_text
 from app.environment_state import get_runtime_model_bundle
@@ -41,6 +43,10 @@ class WorkflowError(ValueError):
     """
     Raised when workflow input is invalid or required files are missing.
     """
+
+
+GENERATION_CATALOG_PATH = DOCS_ROOT / "templates" / "catalog.yaml"
+GENERATION_PROMPT_PATH = DOCS_ROOT / "templates" / "prompts" / "draft_document.md"
 
 
 @dataclass(frozen=True)
@@ -1202,6 +1208,250 @@ def build_context_pack(
 
     context_pack["context_pack_path"] = str(context_path)
     return context_pack
+
+
+def load_generation_catalog() -> dict[str, Any]:
+    """
+    Load document generation target catalog from docs/templates/catalog.yaml.
+    """
+    if not GENERATION_CATALOG_PATH.exists():
+        raise WorkflowError(f"Каталог документов не найден: {GENERATION_CATALOG_PATH}")
+
+    try:
+        payload = yaml.safe_load(GENERATION_CATALOG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise WorkflowError(f"Не удалось прочитать каталог документов: {exc}") from exc
+
+    targets = payload.get("targets") if isinstance(payload.get("targets"), list) else []
+    presets = payload.get("presets") if isinstance(payload.get("presets"), list) else []
+    return {
+        "targets": targets,
+        "presets": presets,
+    }
+
+
+def list_generation_targets() -> dict[str, Any]:
+    """
+    Return serializable generation targets and presets for UI.
+    """
+    catalog = load_generation_catalog()
+    target_ids = {str(item.get("id") or "") for item in catalog["targets"]}
+    presets: list[dict[str, Any]] = []
+    for preset in catalog["presets"]:
+        targets = [target for target in preset.get("targets") or [] if target in target_ids]
+        presets.append({**preset, "targets": targets})
+    return {
+        "targets": catalog["targets"],
+        "presets": presets,
+    }
+
+
+def _targets_by_id() -> dict[str, dict[str, Any]]:
+    catalog = load_generation_catalog()
+    result: dict[str, dict[str, Any]] = {}
+    for target in catalog["targets"]:
+        target_id = str(target.get("id") or "").strip()
+        if target_id:
+            result[target_id] = dict(target)
+    return result
+
+
+def validate_generation_targets(targets: list[str] | None) -> list[dict[str, Any]]:
+    """
+    Validate selected generation target IDs against catalog.
+    """
+    by_id = _targets_by_id()
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_target in targets or []:
+        target_id = str(raw_target).strip()
+        if not target_id or target_id in seen:
+            continue
+        if target_id not in by_id:
+            raise WorkflowError(f"Неизвестный тип документа для генерации: {target_id}")
+        selected.append(by_id[target_id])
+        seen.add(target_id)
+
+    if not selected:
+        raise WorkflowError("Выберите хотя бы один документ для генерации")
+
+    return selected
+
+
+def _target_template_text(target: dict[str, Any]) -> str:
+    template_value = str(target.get("template") or "").strip()
+    if not template_value:
+        raise WorkflowError(f"Для документа {target.get('id')} не указан шаблон")
+
+    template_path = DOCS_ROOT / template_value
+    if not template_path.exists():
+        raise WorkflowError(f"Шаблон документа не найден: {template_path}")
+    return load_text_file(template_path)
+
+
+def _target_context_pack(
+    *,
+    task_id: str,
+    target: dict[str, Any],
+    analysis: dict[str, Any],
+) -> tuple[str, str]:
+    target_id = str(target.get("id") or "")
+    query_hint = str(target.get("query_hint") or target.get("title") or target_id)
+    if target_id and target_id not in SECTION_ROUTING:
+        SECTION_ROUTING[target_id] = RoutingRule(
+            global_categories=GLOBAL_CONTEXT_CATEGORIES,
+            query_hint=query_hint,
+            path_keywords=tuple(tokenize(query_hint)[:12]),
+        )
+    context_pack = build_context_pack(
+        task_id=task_id,
+        section=target_id,
+        analysis=analysis,
+    )
+    context_snippets = [
+        ScoredSnippet(
+            source_level=item["source_level"],
+            source_path=item["source_path"],
+            category=item["category"],
+            score=float(item["score"]),
+            text=item["text"],
+        )
+        for item in context_pack["sources"]
+    ]
+    return format_context_block(context_snippets), str(context_pack["context_pack_path"])
+
+
+def render_document_prompt(
+    *,
+    target: dict[str, Any],
+    document_template: str,
+    task_text: str,
+    context_block: str,
+) -> str:
+    """
+    Render prompt for full-document generation target.
+    """
+    prompt_template = load_text_file(GENERATION_PROMPT_PATH)
+    return render_template(
+        prompt_template,
+        {
+            "document_id": str(target.get("id") or ""),
+            "document_title": str(target.get("title") or target.get("id") or ""),
+            "document_description": str(target.get("description") or ""),
+            "document_template": document_template,
+            "task_text": task_text,
+            "context_block": context_block,
+        },
+    )
+
+
+def generate_document_package(
+    *,
+    task_id: str,
+    targets: list[str],
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Generate selected document targets as separate markdown artifacts.
+    """
+    safe_task_id = sanitize_task_id(task_id)
+    selected_targets = validate_generation_targets(targets)
+    analysis = analyze_task(safe_task_id)
+    _, task_path, _ = resolve_task_paths(safe_task_id)
+    task_text = task_path.read_text(encoding="utf-8", errors="ignore")
+
+    profile_models = get_runtime_model_bundle()
+    generation_model = model or profile_models["draft_model"] or PIPELINE_DRAFT_MODEL or DRAFT_MODEL
+    drafts_dir = ensure_artifacts_dir("drafts", safe_task_id)
+    timestamp = utc_timestamp()
+    prompt_base = load_text_file(GENERATION_PROMPT_PATH)
+
+    generated: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for target in selected_targets:
+        target_id = str(target.get("id") or "")
+        try:
+            document_template = _target_template_text(target)
+            context_block, context_pack_path = _target_context_pack(
+                task_id=safe_task_id,
+                target=target,
+                analysis=analysis,
+            )
+            prompt = render_template(
+                prompt_base,
+                {
+                    "document_id": target_id,
+                    "document_title": str(target.get("title") or target_id),
+                    "document_description": str(target.get("description") or ""),
+                    "document_template": document_template,
+                    "task_text": task_text,
+                    "context_block": context_block,
+                },
+            )
+            body = generate_text(
+                model=generation_model,
+                prompt=prompt,
+                system_prompt=(
+                    "Ты senior системный аналитик. Готовь документ на русском языке, "
+                    "по шаблону и только на основе задачи и контекста."
+                ),
+                temperature=0.1,
+            ).strip()
+            output_path = drafts_dir / f"{timestamp}_{target_id}.md"
+            output_path.write_text(body.rstrip() + "\n", encoding="utf-8")
+            generated.append(
+                {
+                    "target_id": target_id,
+                    "title": str(target.get("title") or target_id),
+                    "path": str(output_path),
+                    "file_name": output_path.name,
+                    "template": str(target.get("template") or ""),
+                    "context_pack_path": context_pack_path,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"target_id": target_id, "error": str(exc)})
+
+    index_lines = [
+        "# Сгенерированный комплект документов",
+        "",
+        f"_task_id: {safe_task_id}_",
+        f"_generated_at: {utc_iso()}_",
+        f"_model: {generation_model}_",
+        "",
+    ]
+    for item in generated:
+        index_lines.append(f"- [{item['title']}]({item['file_name']})")
+    if errors:
+        index_lines.extend(["", "## Ошибки генерации", ""])
+        for item in errors:
+            index_lines.append(f"- `{item['target_id']}`: {item['error']}")
+
+    index_path = drafts_dir / f"{timestamp}_documents_index.md"
+    index_path.write_text("\n".join(index_lines).rstrip() + "\n", encoding="utf-8")
+
+    manifest_path = drafts_dir / f"{timestamp}_documents_manifest.json"
+    manifest = {
+        "task_id": safe_task_id,
+        "generated_at": utc_iso(),
+        "model": generation_model,
+        "targets": [str(target.get("id") or "") for target in selected_targets],
+        "generated": generated,
+        "errors": errors,
+        "index_path": str(index_path),
+    }
+    write_json(manifest_path, manifest)
+
+    return {
+        "task_id": safe_task_id,
+        "model": generation_model,
+        "generated": generated,
+        "errors": errors,
+        "index_path": str(index_path),
+        "manifest_path": str(manifest_path),
+        "analysis": analysis,
+    }
 
 
 def load_section_template(document_type: str, section: str) -> str:

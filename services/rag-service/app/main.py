@@ -36,6 +36,8 @@ from app.workflow import (
     analyze_task,
     build_context_pack,
     create_draft,
+    generate_document_package,
+    list_generation_targets,
     load_pipeline_status,
     prepare_continue_handoff,
     recover_interrupted_pipeline_runs,
@@ -165,6 +167,11 @@ class ReviewImportRequest(BaseModel):
 class AnalyticsReviewRequest(BaseModel):
     review_id: str = Field(min_length=1)
     document_type: str | None = "auto"
+    model: str | None = None
+
+
+class GenerateDocumentsRequest(TaskRequest):
+    targets: list[str] = Field(min_length=1)
     model: str | None = None
 
 
@@ -899,6 +906,46 @@ def draft_endpoint(request: DraftRequest) -> dict:
     return {
         "status": "ok",
         "draft": result,
+    }
+
+
+@app.get("/ui/generation-targets")
+def generation_targets_endpoint() -> dict:
+    """
+    Return available document generation targets and presets.
+    """
+    try:
+        catalog = list_generation_targets()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать каталог документов: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **catalog,
+    }
+
+
+@app.post("/ui/generate-documents")
+def generate_documents_endpoint(request: GenerateDocumentsRequest) -> dict:
+    """
+    Generate selected document targets as a package of markdown artifacts.
+    """
+    try:
+        result = generate_document_package(
+            task_id=request.task_id,
+            targets=request.targets,
+            model=request.model,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации комплекта документов: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "package": result,
     }
 
 

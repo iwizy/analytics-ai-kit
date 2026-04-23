@@ -1,0 +1,117 @@
+targets:
+  - id: service_overview
+    title: Обзор сервиса
+    description: Паспорт сервиса, границы ответственности, роли и связанные документы.
+    template: templates/microservice/00_service_overview.md
+    query_hint: назначение сервиса границы ответственность команда роли связанные документы
+    default_for: [microservice, full]
+
+  - id: architecture_decisions
+    title: Архитектурные решения
+    description: AS-IS, TO-BE, ADR, влияние на смежные системы и заключение архитектора.
+    template: templates/microservice/10_architecture_decisions.md
+    query_hint: архитектура as-is to-be adr решения риски смежные системы
+    default_for: [microservice, full]
+
+  - id: business_requirements
+    title: Бизнес-требования
+    description: Бизнес-контекст, цели, ограничения, источники требований и открытые вопросы.
+    template: templates/microservice/20_business_requirements.md
+    query_hint: бизнес требования цели kpi ограничения допущения источники требований
+    default_for: [feature, microservice, full]
+
+  - id: release_documentation
+    title: Документация к релизу
+    description: Состав релиза, изменения контрактов, миграции, риски и план отката.
+    template: templates/microservice/30_release_documentation.md
+    query_hint: релиз изменения состав релиза миграции риски откат проверки
+    default_for: [release, full]
+
+  - id: external_integrations
+    title: Внешние интеграции
+    description: Интеграции со внешними системами, контракты, SLA, ошибки и fallback.
+    template: templates/microservice/integrations/41_external_integrations.md
+    query_hint: внешние интеграции провайдер потребитель endpoint auth sla retry fallback
+    default_for: [integration, microservice, full]
+
+  - id: internal_integrations
+    title: Внутренние интеграции
+    description: Внутренние сервисы, контракты, таймауты, идемпотентность и наблюдаемость.
+    template: templates/microservice/integrations/42_internal_integrations.md
+    query_hint: внутренние интеграции сервисы контракты api kafka timeout retry идемпотентность
+    default_for: [feature, integration, microservice, full]
+
+  - id: non_functional_requirements
+    title: Нефункциональные требования
+    description: Производительность, доступность, безопасность, логирование, аудит и эксплуатация.
+    template: templates/microservice/50_non_functional_requirements.md
+    query_hint: нефункциональные требования производительность доступность безопасность аудит логирование мониторинг
+    default_for: [feature, microservice, full]
+
+  - id: api_overview
+    title: Обзор API
+    description: Предоставляемые и потребляемые интерфейсы, версионирование и совместимость.
+    template: templates/microservice/api/61_api_overview.md
+    query_hint: api обзор интерфейсы предоставляемые потребляемые совместимость версионирование
+    default_for: [integration, microservice, full]
+
+  - id: rest_api
+    title: REST API
+    description: HTTP endpoints, параметры, примеры запросов/ответов, ошибки и ограничения.
+    template: templates/microservice/api/62_rest_api.md
+    query_hint: rest api endpoint http параметры запрос ответ ошибки rate limit timeout
+    default_for: [integration, microservice, full]
+
+  - id: kafka_topics
+    title: Kafka topics
+    description: Топики, publisher/consumer, DTO, совместимость и повторная обработка.
+    template: templates/microservice/api/63_kafka_topics.md
+    query_hint: kafka топик publisher consumer dto сообщение partition retention compatibility
+    default_for: [integration, microservice, full]
+
+  - id: db_schema
+    title: Схема БД
+    description: Таблицы, колонки, связи, индексы, ограничения и миграции.
+    template: templates/microservice/70_db_schema.md
+    query_hint: база данных схема таблицы колонки индексы ограничения миграции
+    default_for: [microservice, full]
+
+  - id: deployment_scheme
+    title: Схема развертывания
+    description: Окружения, компоненты, сетевые зависимости, CI/CD и план отката.
+    template: templates/microservice/80_deployment_scheme.md
+    query_hint: развертывание deployment окружение kubernetes namespace ci cd откат
+    default_for: [microservice, release, full]
+
+  - id: functional_requirements
+    title: Функциональные требования
+    description: Сценарии, требования, валидации, ошибки, ограничения и открытые вопросы.
+    template: templates/microservice/90_functional_requirements.md
+    query_hint: функциональные требования сценарии валидации ошибки критерии приемки процесс
+    default_for: [feature, integration, microservice, full]
+
+presets:
+  - id: feature
+    title: Фича / изменение
+    description: Минимальный комплект для описания новой функции или изменения поведения.
+    targets: [business_requirements, functional_requirements, non_functional_requirements, internal_integrations]
+
+  - id: integration
+    title: Интеграция
+    description: Комплект для задачи, где главный риск в контрактах и обмене данными.
+    targets: [functional_requirements, internal_integrations, external_integrations, api_overview, rest_api, kafka_topics]
+
+  - id: microservice
+    title: Новый микросервис
+    description: Основная документация сервиса от паспорта до API, БД и развертывания.
+    targets: [service_overview, architecture_decisions, business_requirements, functional_requirements, non_functional_requirements, internal_integrations, external_integrations, api_overview, rest_api, kafka_topics, db_schema, deployment_scheme]
+
+  - id: release
+    title: Релиз
+    description: Документы для подготовки релиза, рисков, миграций и отката.
+    targets: [release_documentation, deployment_scheme, api_overview]
+
+  - id: full
+    title: Полный комплект
+    description: Все доступные документы из каталога шаблонов.
+    targets: [service_overview, architecture_decisions, business_requirements, release_documentation, external_integrations, internal_integrations, non_functional_requirements, api_overview, rest_api, kafka_topics, db_schema, deployment_scheme, functional_requirements]
