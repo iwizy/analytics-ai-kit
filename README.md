@@ -6,6 +6,7 @@
 
 - подготовить задачу и контекст,
 - импортировать статьи и документы из Confluence и файлов,
+- собрать дерево Confluence-страниц в общий контекст проекта,
 - собрать `draft + gaps + refine`,
 - подготовить handoff для `VS Code + Continue`,
 - обмениваться общим контекстом между аналитиками без облака и без `git`,
@@ -26,6 +27,7 @@
 - `Подготовка окружения`
 - `Подготовка статьи`
 - `Модели и контекст`
+- `Сбор контекста`
 - `Ревью аналитики`
 - `Обмен контекстом`
 
@@ -86,6 +88,7 @@ docs/
   services/
   templates/
   shared-context/
+    confluence_collections/
   continue/
 ```
 
@@ -101,6 +104,7 @@ docs/
 - `artifacts/review_sources/<review-id>/` — источники для отдельного ревью статьи
 - `artifacts/analytics_reviews/<review-id>/` — отчёты `Ревью аналитики`
 - `docs/shared-context/` — общий контекст, который можно публиковать коллегам через обмен
+- `docs/shared-context/confluence_collections/` — собранные деревья Confluence-страниц
 - `docs/templates/` — шаблоны секций и промпты
 
 ## Подготовка окружения
@@ -153,6 +157,22 @@ docs/
 - ссылки Confluence
 
 Импортированные ссылки сохраняются локально как `.md` в `attachments`.
+
+## Сбор контекста
+
+Раздел `Сбор контекста` обходит корневую страницу Confluence и найденные дочерние ссылки.
+
+Результат сохраняется в:
+
+- `docs/shared-context/confluence_collections/<collection-id>/context_index.md`
+- `docs/shared-context/confluence_collections/<collection-id>/manifest.json`
+- `docs/shared-context/confluence_collections/<collection-id>/pages/`
+
+После этого коллекцию можно передать коллегам через `Обмен контекстом`, выбрав категорию `Общий контекст`.
+
+Подробности:
+
+- [docs/context-collection.md](/Users/iwizard/Dev/analytics-ai-kit/docs/context-collection.md)
 
 ## Ревью аналитики
 

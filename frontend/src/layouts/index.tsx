@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Outlet, useLocation } from '@umijs/max';
 import {
   CheckCircleOutlined,
+  ClusterOutlined,
   DatabaseOutlined,
   FileTextOutlined,
   ProfileOutlined,
@@ -73,6 +74,11 @@ export default function AppLayout() {
       ),
     },
     {
+      key: '/context-collection',
+      icon: <ClusterOutlined />,
+      label: <Link to="/context-collection"><span style={wrappedMenuLabelStyle}>Сбор контекста</span></Link>,
+    },
+    {
       key: '/review',
       icon: <ProfileOutlined />,
       label: <Link to="/review"><span style={wrappedMenuLabelStyle}>Ревью аналитики</span></Link>,
@@ -93,6 +99,8 @@ export default function AppLayout() {
 
   const selectedKey = location.pathname.startsWith('/models-docs')
     ? '/models-docs'
+    : location.pathname.startsWith('/context-collection')
+      ? '/context-collection'
     : location.pathname.startsWith('/review')
       ? '/review'
     : location.pathname.startsWith('/exchange')

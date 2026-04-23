@@ -20,6 +20,11 @@ from app.confluence import (
     save_analyst_profile,
 )
 from app.analytics_review import import_review_confluence, run_analytics_review
+from app.context_collection import (
+    ContextCollectionError,
+    collect_confluence_context,
+    list_context_collections,
+)
 from app.exchange_api import router as exchange_router
 from app.ingest import reindex_all_documents
 from app.environment_api import router as environment_router
@@ -161,6 +166,13 @@ class AnalyticsReviewRequest(BaseModel):
     review_id: str = Field(min_length=1)
     document_type: str | None = "auto"
     model: str | None = None
+
+
+class ContextCollectionRequest(BaseModel):
+    root_url: str = Field(min_length=1)
+    collection_id: str | None = ""
+    max_depth: int = Field(default=1, ge=0, le=3)
+    max_pages: int = Field(default=20, ge=1, le=50)
 
 
 def iso_from_timestamp(timestamp: float) -> str:
@@ -403,6 +415,40 @@ def ui_import_confluence(request: ConfluenceImportRequest) -> dict:
     return {
         "status": "ok",
         "task_id": safe_task_id,
+        **result,
+    }
+
+
+@app.get("/ui/context-collections")
+def ui_context_collections() -> dict:
+    """
+    List collected shared context packs from Confluence.
+    """
+    return {
+        "status": "ok",
+        "collections": list_context_collections(),
+    }
+
+
+@app.post("/ui/context-collections/collect")
+def ui_collect_context(request: ContextCollectionRequest) -> dict:
+    """
+    Crawl a Confluence page and linked child pages into shared context storage.
+    """
+    try:
+        result = collect_confluence_context(
+            root_url=request.root_url,
+            collection_id=request.collection_id or "",
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+        )
+    except ContextCollectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка сбора контекста: {exc}") from exc
+
+    return {
+        "status": "ok",
         **result,
     }
 

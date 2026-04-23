@@ -21,6 +21,11 @@ export default defineConfig({
       component: '@/pages/ModelsDocs/index.tsx',
     },
     {
+      path: '/context-collection',
+      name: 'Сбор контекста',
+      component: '@/pages/ContextCollection/index.tsx',
+    },
+    {
       path: '/review',
       name: 'Ревью аналитики',
       component: '@/pages/Review/index.tsx',
