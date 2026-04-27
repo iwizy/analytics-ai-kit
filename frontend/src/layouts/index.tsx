@@ -47,6 +47,7 @@ export default function AppLayout() {
   const taskLocked = environment ? !environment.readiness.article_ready : false;
   const contextWarning = environment ? !environment.readiness.all_ready : false;
   const exchangeWarning = environment ? environment.exchange.new_bundles_count > 0 || environment.exchange.status !== 'ready' : false;
+  const missingReadinessItems = environment?.readiness.missing_items || [];
   const wrappedMenuLabelStyle: React.CSSProperties = { whiteSpace: 'normal', lineHeight: 1.35 };
 
   const items = useMemo<MenuProps['items']>(() => [
@@ -129,7 +130,20 @@ export default function AppLayout() {
                   type="warning"
                   showIcon
                   message="Подготовка статьи пока недоступна"
-                  description="Сначала заполни базовые настройки, подтверди готовность VS Code и Continue и скачай обязательные модели."
+                  description={(
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      <Typography.Text type="secondary">
+                        Нужно закончить:
+                      </Typography.Text>
+                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                        {missingReadinessItems.length ? missingReadinessItems.map((item) => (
+                          <li key={item}>{item}</li>
+                        )) : (
+                          <li>Обнови статус окружения на странице подготовки.</li>
+                        )}
+                      </ul>
+                    </Space>
+                  )}
                 />
               ) : null}
             </Space>
