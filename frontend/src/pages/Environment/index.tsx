@@ -42,6 +42,7 @@ export default function EnvironmentPage() {
   const [saving, setSaving] = useState(false);
   const [baselineValues, setBaselineValues] = useState<EnvironmentForm | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   function normalizeFormValues(values: Partial<EnvironmentForm> | null | undefined): EnvironmentForm {
     const optionalModels = [...(values?.optional_models || [])]
@@ -76,6 +77,7 @@ export default function EnvironmentPage() {
   async function loadSnapshot() {
     const payload = await apiRequest<EnvironmentSnapshot>('/ui/environment-settings');
     setSnapshot(payload);
+    setSaveError('');
     const values = normalizeFormValues({
       confluence_base_url: payload.settings.confluence_base_url,
       confluence_login: payload.settings.confluence_login,
@@ -115,9 +117,12 @@ export default function EnvironmentPage() {
       form.setFieldsValue(nextValues);
       setBaselineValues(nextValues);
       setHasChanges(false);
+      setSaveError('');
       message.success('Настройки окружения сохранены');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Не удалось сохранить настройки');
+      const errorMessage = error instanceof Error ? error.message : 'Не удалось сохранить настройки';
+      setSaveError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setSaving(false);
     }
@@ -149,6 +154,17 @@ export default function EnvironmentPage() {
             description={snapshot.readiness.all_ready
               ? 'Теперь можно переходить в «Подготовка статьи» и собирать материалы.'
               : snapshot.readiness.missing_items.join(' | ')}
+          />
+        ) : null}
+
+        {saveError ? (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            message="Настройки не сохранились"
+            description={saveError}
+            onClose={() => setSaveError('')}
           />
         ) : null}
 

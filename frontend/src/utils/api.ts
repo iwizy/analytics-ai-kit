@@ -1,13 +1,20 @@
 export const API_BASE = process.env.API_BASE || 'http://localhost:8000';
 
 export async function apiRequest<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Не удалось подключиться к API ${API_BASE}: ${message}`);
+  }
 
   const payload = response.headers.get('content-type')?.includes('application/json')
     ? await response.json()
@@ -16,7 +23,9 @@ export async function apiRequest<T = unknown>(path: string, options: RequestInit
   if (!response.ok) {
     const detail = typeof payload === 'string'
       ? payload
-      : (payload as { detail?: string }).detail || JSON.stringify(payload);
+      : Array.isArray((payload as { detail?: unknown }).detail)
+        ? JSON.stringify((payload as { detail: unknown }).detail)
+        : (payload as { detail?: string }).detail || JSON.stringify(payload);
     throw new Error(detail || 'Ошибка запроса');
   }
 

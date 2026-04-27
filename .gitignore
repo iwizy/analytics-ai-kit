@@ -12,6 +12,7 @@ storage/qdrant/*
 storage/open-webui/*
 storage/ollama/*
 storage/rag-service/*
+storage/team-exchange/*
 
 # keep folders
 !storage/qdrant/.gitkeep
