@@ -24,6 +24,10 @@ _CONTINUE_CONFIG_PATHS = {
     "linux": "~/.continue/config.yaml",
 }
 
+
+class ContinueConfigWriteError(RuntimeError):
+    """Raised when Continue config cannot be created from the UI."""
+
 _MODEL_RECOMMENDATIONS = [
     {
         "key": "light",
@@ -311,6 +315,42 @@ def _load_continue_config() -> dict[str, Any]:
     }
 
 
+def write_continue_config(*, overwrite: bool = False) -> dict[str, Any]:
+    settings = load_environment_settings()
+    optional_catalog = build_optional_models_catalog(
+        selected_models=list(settings.get("optional_models") or []),
+        installed_models=[],
+    )
+    yaml_text = _dump_continue_template(str(settings.get("model_profile") or "powerful"), optional_catalog)
+    target = _CONTINUE_CONFIG_PATH
+
+    if target.exists() and not overwrite:
+        raise ContinueConfigWriteError(
+            f"Файл {_CONTINUE_CONFIG_PATH_LABEL} уже существует. "
+            "Если нужно привести его к рекомендуемому виду, нажми обновление с перезаписью."
+        )
+
+    try:
+        _CONTINUE_CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
+        target.write_text(yaml_text, encoding="utf-8")
+    except PermissionError as exc:
+        raise ContinueConfigWriteError(
+            f"Нет прав на запись в {_CONTINUE_CONFIG_PATH_LABEL}. "
+            "Перезапусти проект через ./start.command, чтобы папка Continue была смонтирована на запись."
+        ) from exc
+    except OSError as exc:
+        raise ContinueConfigWriteError(
+            f"Не удалось записать {_CONTINUE_CONFIG_PATH_LABEL}: {exc}"
+        ) from exc
+
+    return {
+        "path": _CONTINUE_CONFIG_PATH_LABEL,
+        "container_path": str(target),
+        "overwritten": bool(overwrite),
+        "bytes": len(yaml_text.encode("utf-8")),
+    }
+
+
 def build_continue_config_snapshot(*, profile_key: str | None, optional_catalog: list[dict[str, Any]]) -> dict[str, Any]:
     loaded = _load_continue_config()
     payload = dict(loaded.get("payload") or {})
@@ -359,6 +399,8 @@ def build_continue_config_snapshot(*, profile_key: str | None, optional_catalog:
         "status": status,
         "host_os": _HOST_OS_NAME,
         "detected_path": _CONTINUE_CONFIG_PATH_LABEL,
+        "container_path": str(_CONTINUE_CONFIG_PATH),
+        "writable": os.access(_CONTINUE_CONFIG_ROOT, os.W_OK),
         "known_paths": dict(_CONTINUE_CONFIG_PATHS),
         "exists": bool(loaded["exists"]),
         "parse_error": str(loaded["parse_error"] or ""),

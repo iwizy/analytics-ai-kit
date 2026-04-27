@@ -4,7 +4,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.confluence import ConfluenceImportError, load_analyst_profile, save_analyst_profile
-from app.environment_state import DEFAULT_ANALYST_ID, build_environment_snapshot, save_environment_settings
+from app.environment_state import (
+    DEFAULT_ANALYST_ID,
+    ContinueConfigWriteError,
+    build_environment_snapshot,
+    save_environment_settings,
+    write_continue_config,
+)
 from app.operations import get_operations_status
 
 router = APIRouter()
@@ -22,6 +28,10 @@ class EnvironmentSettingsRequest(BaseModel):
     exchange_folder: str = ""
     exchange_auto_scan: bool = True
     exchange_poll_interval_sec: int = 60
+
+
+class ContinueConfigRequest(BaseModel):
+    overwrite: bool = False
 
 
 @router.get("/ui/environment-settings")
@@ -73,4 +83,26 @@ def ui_save_environment_settings(request: EnvironmentSettingsRequest) -> dict:
         raise HTTPException(
             status_code=500,
             detail=f"Не удалось сохранить настройки окружения: {exc}",
+        ) from exc
+
+
+@router.post("/ui/continue-config")
+def ui_write_continue_config(request: ContinueConfigRequest) -> dict:
+    try:
+        result = write_continue_config(overwrite=request.overwrite)
+        operations = get_operations_status()
+        return {
+            "status": "ok",
+            "continue_config_write": result,
+            **build_environment_snapshot(operations.get("models") or {}),
+        }
+    except ContinueConfigWriteError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось создать config.yaml Continue: {exc}",
         ) from exc

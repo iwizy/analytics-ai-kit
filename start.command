@@ -5,7 +5,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 FRONTEND_PORT="${FRONTEND_PORT:-3001}"
-mkdir -p "$ROOT_DIR/storage/continue-empty"
 mkdir -p "$ROOT_DIR/storage/team-exchange"
 
 HOST_OS_NAME="linux"
@@ -13,11 +12,14 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   HOST_OS_NAME="macos"
 fi
 
-CONTINUE_CONFIG_HOST_DIR="$ROOT_DIR/storage/continue-empty"
-CONTINUE_CONFIG_HOST_PATH_LABEL="~/.continue/config.yaml"
-if [[ -d "$HOME/.continue" ]]; then
+if [[ -n "${HOME:-}" ]]; then
   CONTINUE_CONFIG_HOST_DIR="$HOME/.continue"
-  CONTINUE_CONFIG_HOST_PATH_LABEL="$HOME/.continue/config.yaml"
+  mkdir -p "$CONTINUE_CONFIG_HOST_DIR"
+  CONTINUE_CONFIG_HOST_PATH_LABEL="$CONTINUE_CONFIG_HOST_DIR/config.yaml"
+else
+  CONTINUE_CONFIG_HOST_DIR="$ROOT_DIR/storage/continue-empty"
+  mkdir -p "$CONTINUE_CONFIG_HOST_DIR"
+  CONTINUE_CONFIG_HOST_PATH_LABEL="~/.continue/config.yaml"
 fi
 
 export HOST_OS_NAME

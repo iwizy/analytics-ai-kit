@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircleOutlined, DownloadOutlined, LinkOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, DownloadOutlined, FileAddOutlined, LinkOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
   Alert,
@@ -10,6 +10,7 @@ import {
   Input,
   InputNumber,
   List,
+  Popconfirm,
   Radio,
   Space,
   Tag,
@@ -43,6 +44,8 @@ export default function EnvironmentPage() {
   const [baselineValues, setBaselineValues] = useState<EnvironmentForm | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [continueConfigBusy, setContinueConfigBusy] = useState(false);
+  const [continueConfigError, setContinueConfigError] = useState('');
 
   function normalizeFormValues(values: Partial<EnvironmentForm> | null | undefined): EnvironmentForm {
     const optionalModels = [...(values?.optional_models || [])]
@@ -78,6 +81,7 @@ export default function EnvironmentPage() {
     const payload = await apiRequest<EnvironmentSnapshot>('/ui/environment-settings');
     setSnapshot(payload);
     setSaveError('');
+    setContinueConfigError('');
     const values = normalizeFormValues({
       confluence_base_url: payload.settings.confluence_base_url,
       confluence_login: payload.settings.confluence_login,
@@ -130,6 +134,25 @@ export default function EnvironmentPage() {
 
   async function handleSave() {
     await saveSettings(normalizeFormValues(form.getFieldsValue(true)));
+  }
+
+  async function writeContinueConfig(overwrite: boolean) {
+    setContinueConfigBusy(true);
+    try {
+      const payload = await apiRequest<EnvironmentSnapshot & { status: string; continue_config_write: { path: string } }>('/ui/continue-config', {
+        method: 'POST',
+        body: JSON.stringify({ overwrite }),
+      });
+      setSnapshot(payload);
+      setContinueConfigError('');
+      message.success(`config.yaml Continue ${overwrite ? 'обновлён' : 'создан'}: ${payload.continue_config_write.path}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Не удалось создать config.yaml Continue';
+      setContinueConfigError(errorMessage);
+      message.error(errorMessage);
+    } finally {
+      setContinueConfigBusy(false);
+    }
   }
 
   function resetToSavedState() {
@@ -443,6 +466,62 @@ export default function EnvironmentPage() {
                           : `Файл ${snapshot.continue_config.detected_path} пока не найден. Можно создать его по шаблону из репозитория.`
                     }
                   />
+
+                  {continueConfigError ? (
+                    <Alert
+                      type="error"
+                      showIcon
+                      closable
+                      message="config.yaml Continue не сохранён"
+                      description={continueConfigError}
+                      onClose={() => setContinueConfigError('')}
+                    />
+                  ) : null}
+
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Space wrap>
+                      {snapshot.continue_config.exists ? (
+                        <Popconfirm
+                          title="Перезаписать config.yaml Continue?"
+                          description="Система заменит файл рекомендуемым YAML для текущего профиля и выбранных optional-моделей."
+                          okText="Перезаписать"
+                          cancelText="Отмена"
+                          onConfirm={() => void writeContinueConfig(true)}
+                        >
+                          <Button
+                            icon={<FileAddOutlined />}
+                            loading={continueConfigBusy}
+                          >
+                            Обновить config.yaml по рекомендации
+                          </Button>
+                        </Popconfirm>
+                      ) : (
+                        <Button
+                          type="primary"
+                          icon={<FileAddOutlined />}
+                          loading={continueConfigBusy}
+                          onClick={() => void writeContinueConfig(false)}
+                        >
+                          Создать config.yaml в правильном месте
+                        </Button>
+                      )}
+                      <Button onClick={() => void loadSnapshot()} disabled={continueConfigBusy}>
+                        Проверить заново
+                      </Button>
+                    </Space>
+                    <Typography.Text type="secondary">
+                      Кнопка записывает файл в путь, который ожидает Continue для текущей ОС:
+                      {' '}
+                      <Typography.Text code>{snapshot.continue_config.detected_path}</Typography.Text>
+                      . Если Docker не видит этот путь, перезапусти проект через
+                      {' '}
+                      <Typography.Text code>./start.command</Typography.Text>
+                      , он смонтирует папку
+                      {' '}
+                      <Typography.Text code>~/.continue</Typography.Text>
+                      {' '}на запись.
+                    </Typography.Text>
+                  </Space>
 
                   <Descriptions column={1} size="small" bordered>
                     <Descriptions.Item label="Где искать на macOS">

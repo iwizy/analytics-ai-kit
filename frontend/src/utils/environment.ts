@@ -39,6 +39,8 @@ export type EnvironmentSnapshot = {
     status: string;
     host_os: string;
     detected_path: string;
+    container_path: string;
+    writable: boolean;
     known_paths: Record<string, string>;
     exists: boolean;
     parse_error: string;

@@ -62,7 +62,7 @@ services:
       - ./artifacts:/data/artifacts
       - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${CONTINUE_CONFIG_HOST_DIR:-./storage/continue-empty}:/host-continue:ro
+      - ${CONTINUE_CONFIG_HOST_DIR:-./storage/continue-empty}:/host-continue
       - ${TEAM_EXCHANGE_HOST_DIR:-./storage/team-exchange}:/data/team-exchange
 
   frontend:
