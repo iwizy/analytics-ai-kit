@@ -417,7 +417,7 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         and settings.get("has_confluence_password")
     )
     vscode_ready = bool(settings.get("vscode_ready"))
-    continue_ready = bool(settings.get("continue_ready")) and continue_config["status"] == "ready"
+    continue_ready = bool(settings.get("continue_ready"))
     models_ready = not model_plan["missing_models"]
 
     missing_items: list[str] = []
@@ -427,8 +427,6 @@ def build_environment_snapshot(models: dict[str, Any]) -> dict[str, Any]:
         missing_items.append("Отметить готовность VS Code")
     if not settings.get("continue_ready"):
         missing_items.append("Отметить готовность Continue")
-    elif continue_config["status"] != "ready":
-        missing_items.append("Привести config.yaml Continue к рекомендуемому виду")
     if not models_ready:
         missing_items.append("Скачать модели для выбранного профиля")
 
