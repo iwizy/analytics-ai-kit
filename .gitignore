@@ -11,10 +11,13 @@
 storage/qdrant/*
 storage/open-webui/*
 storage/ollama/*
+storage/rag-service/*
+storage/team-exchange/*
 
 # keep folders
 !storage/qdrant/.gitkeep
 !storage/ollama/.gitkeep
+!storage/rag-service/.gitkeep
 
 # =========================
 # USER DOCUMENTS (CONTEXT)
@@ -37,9 +40,13 @@ tasks/inbox/*
 artifacts/drafts/*
 artifacts/reviews/*
 artifacts/context_packs/*
+artifacts/pipeline_runs/*
+artifacts/handoffs/*
 !artifacts/drafts/.gitkeep
 !artifacts/reviews/.gitkeep
 !artifacts/context_packs/.gitkeep
+!artifacts/pipeline_runs/.gitkeep
+!artifacts/handoffs/.gitkeep
 
 # =========================
 # PYTHON (rag-service)
@@ -97,6 +104,8 @@ temp/
 # NODE (если вдруг добавится фронт)
 # =========================
 node_modules/
+.umi/
+frontend/.umi/
 
 # =========================
 # BUILD ARTIFACTS

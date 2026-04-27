@@ -1,0 +1,40 @@
+name: Analytics AI Kit
+version: 1.0.0
+schema: v1
+
+models:
+  - name: fast
+    provider: ollama
+    model: gemma4:e2b
+    apiBase: http://127.0.0.1:11434
+
+  - name: main
+    provider: ollama
+    model: qwen2.5-coder:14b
+    apiBase: http://127.0.0.1:11434
+    capabilities:
+      - tool_use
+
+  # Uncomment if you use the powerful profile and downloaded qwen3-coder:30b
+  # - name: heavy
+  #   provider: ollama
+  #   model: qwen3-coder:30b
+  #   apiBase: http://127.0.0.1:11434
+  #   capabilities:
+  #     - tool_use
+
+  # Uncomment if you enabled GPT OSS 20B as an optional review model
+  # - name: review
+  #   provider: ollama
+  #   model: gpt-oss:20b
+  #   apiBase: http://127.0.0.1:11434
+  #   capabilities:
+  #     - tool_use
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder

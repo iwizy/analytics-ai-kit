@@ -19,9 +19,10 @@ SERVICE_CONTAINERS = {
     "qdrant": "analytics-qdrant",
     "ollama": "analytics-ollama",
     "rag-service": "analytics-rag-service",
+    "frontend": "analytics-frontend",
 }
 
-DEFAULT_STACK_SERVICES = ("qdrant", "ollama")
+DEFAULT_STACK_SERVICES = ("qdrant", "ollama", "rag-service", "frontend")
 _ALLOWED_CONTAINER_ACTIONS = {"start", "stop", "restart"}
 _LOG_LIMIT = 300
 

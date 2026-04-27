@@ -1,0 +1,5 @@
+node_modules
+.umi
+dist
+.git
+npm-debug.log

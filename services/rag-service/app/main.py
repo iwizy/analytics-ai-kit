@@ -4,15 +4,30 @@ Main application entrypoint for the local analytics RAG service.
 
 from __future__ import annotations
 
+import json
 import mimetypes
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from app.confluence import (
+    ConfluenceImportError,
+    import_confluence_urls,
+    save_analyst_profile,
+)
+from app.analytics_review import import_review_confluence, run_analytics_review
+from app.context_collection import (
+    ContextCollectionError,
+    collect_confluence_context,
+    list_context_collections,
+)
+from app.exchange_api import router as exchange_router
 from app.ingest import reindex_all_documents
+from app.environment_api import router as environment_router
 from app.operations import control_containers, get_operations_status, start_models_pull
 from app.search import search_documents
 from app.settings import ARTIFACTS_ROOT, SUPPORTED_EXTENSIONS, TASKS_ROOT
@@ -21,7 +36,11 @@ from app.workflow import (
     analyze_task,
     build_context_pack,
     create_draft,
+    generate_document_package,
+    list_generation_targets,
     load_pipeline_status,
+    prepare_continue_handoff,
+    recover_interrupted_pipeline_runs,
     run_pipeline,
     start_pipeline_run,
     refine_draft,
@@ -30,9 +49,25 @@ from app.workflow import (
 )
 
 app = FastAPI(title="Analytics RAG Service", version="0.3.0")
+app.include_router(environment_router)
+app.include_router(exchange_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 UI_HTML_PATH = Path(__file__).resolve().parent / "static" / "ui.html"
-ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs")
+ARTIFACT_KINDS = ("drafts", "reviews", "context_packs", "pipeline_runs", "handoffs", "review_sources", "analytics_reviews")
 PREVIEW_CHAR_LIMIT = 12000
 
 DEFAULT_TASK_TEMPLATE = """# Задача
@@ -109,6 +144,44 @@ class ModelsPullRequest(BaseModel):
     force: bool = False
 
 
+class AnalystProfileRequest(BaseModel):
+    analyst_id: str = Field(min_length=1)
+    login: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class ConfluenceImportRequest(TaskRequest):
+    analyst_id: str = Field(min_length=1)
+    urls: list[str] = Field(min_length=1)
+
+
+class HandoffRequest(TaskRequest):
+    notes: str | None = None
+
+
+class ReviewImportRequest(BaseModel):
+    review_id: str = Field(min_length=1)
+    urls: list[str] = Field(min_length=1)
+
+
+class AnalyticsReviewRequest(BaseModel):
+    review_id: str = Field(min_length=1)
+    document_type: str | None = "auto"
+    model: str | None = None
+
+
+class GenerateDocumentsRequest(TaskRequest):
+    targets: list[str] = Field(min_length=1)
+    model: str | None = None
+
+
+class ContextCollectionRequest(BaseModel):
+    root_url: str = Field(min_length=1)
+    collection_id: str | None = ""
+    max_depth: int = Field(default=1, ge=0, le=3)
+    max_pages: int = Field(default=20, ge=1, le=50)
+
+
 def iso_from_timestamp(timestamp: float) -> str:
     """
     Convert unix timestamp to ISO string.
@@ -159,6 +232,18 @@ def preview_text(path: Path, max_chars: int = PREVIEW_CHAR_LIMIT) -> str:
     return f"{text[:max_chars]}\n\n...[truncated]"
 
 
+def read_json(path: Path) -> dict | None:
+    """
+    Read JSON file into dict when possible.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
 def validate_artifact_kind(kind: str) -> str:
     """
     Validate artifact kind.
@@ -166,6 +251,14 @@ def validate_artifact_kind(kind: str) -> str:
     if kind not in ARTIFACT_KINDS:
         raise HTTPException(status_code=400, detail=f"Недопустимый вид артефакта: {kind}")
     return kind
+
+
+def review_source_dir(review_id: str) -> Path:
+    return ARTIFACTS_ROOT / "review_sources" / sanitize_task_id(review_id)
+
+
+def analytics_review_dir(review_id: str) -> Path:
+    return ARTIFACTS_ROOT / "analytics_reviews" / sanitize_task_id(review_id)
 
 
 @app.get("/ui", response_class=HTMLResponse)
@@ -177,6 +270,14 @@ def ui_page() -> str:
         raise HTTPException(status_code=500, detail="UI file is missing")
 
     return UI_HTML_PATH.read_text(encoding="utf-8")
+
+
+@app.on_event("startup")
+def startup_recover_pipeline_runs() -> None:
+    """
+    Mark in-progress pipeline runs as interrupted when service restarts.
+    """
+    recover_interrupted_pipeline_runs()
 
 
 @app.get("/ui/task-template")
@@ -277,6 +378,88 @@ async def ui_upload_attachments(task_id: str, files: list[UploadFile] = File(...
     }
 
 
+@app.post("/ui/analyst-profiles")
+def ui_save_analyst_profile(request: AnalystProfileRequest) -> dict:
+    """
+    Save or update per-analyst Confluence credentials.
+    """
+    try:
+        profile = save_analyst_profile(
+            analyst_id=request.analyst_id,
+            login=request.login,
+            password=request.password,
+        )
+    except ConfluenceImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "status": "ok",
+        "profile": profile,
+    }
+
+
+@app.post("/ui/import-confluence")
+def ui_import_confluence(request: ConfluenceImportRequest) -> dict:
+    """
+    Import Confluence pages into task attachments using stored analyst credentials.
+    """
+    safe_task_id = sanitize_task_id(request.task_id)
+    task_dir = TASKS_ROOT / "inbox" / safe_task_id
+    attachments_dir = task_dir / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = import_confluence_urls(
+            analyst_id=request.analyst_id,
+            urls=request.urls,
+            attachments_dir=attachments_dir,
+        )
+    except ConfluenceImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта Confluence: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "task_id": safe_task_id,
+        **result,
+    }
+
+
+@app.get("/ui/context-collections")
+def ui_context_collections() -> dict:
+    """
+    List collected shared context packs from Confluence.
+    """
+    return {
+        "status": "ok",
+        "collections": list_context_collections(),
+    }
+
+
+@app.post("/ui/context-collections/collect")
+def ui_collect_context(request: ContextCollectionRequest) -> dict:
+    """
+    Crawl a Confluence page and linked child pages into shared context storage.
+    """
+    try:
+        result = collect_confluence_context(
+            root_url=request.root_url,
+            collection_id=request.collection_id or "",
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+        )
+    except ContextCollectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка сбора контекста: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **result,
+    }
+
+
 @app.get("/ui/state/{task_id}")
 def ui_state(task_id: str) -> dict:
     """
@@ -308,6 +491,8 @@ def ui_state(task_id: str) -> dict:
 
     latest_draft_preview = ""
     latest_review_preview = ""
+    latest_handoff_preview = ""
+    latest_pipeline = None
 
     draft_files = list_regular_files(ARTIFACTS_ROOT / "drafts" / safe_task_id)
     if draft_files:
@@ -316,6 +501,14 @@ def ui_state(task_id: str) -> dict:
     review_files = list_regular_files(ARTIFACTS_ROOT / "reviews" / safe_task_id)
     if review_files:
         latest_review_preview = preview_text(review_files[0])
+
+    handoff_files = list_regular_files(ARTIFACTS_ROOT / "handoffs" / safe_task_id)
+    if handoff_files:
+        latest_handoff_preview = preview_text(handoff_files[0])
+
+    pipeline_files = list_regular_files(ARTIFACTS_ROOT / "pipeline_runs" / safe_task_id)
+    if pipeline_files:
+        latest_pipeline = read_json(pipeline_files[0])
 
     return {
         "status": "ok",
@@ -327,9 +520,11 @@ def ui_state(task_id: str) -> dict:
         "analysis": analysis,
         "analysis_error": analysis_error,
         "artifacts": artifacts,
+        "latest_pipeline": latest_pipeline,
         "latest": {
             "draft_preview": latest_draft_preview,
             "gaps_preview": latest_review_preview,
+            "handoff_preview": latest_handoff_preview,
         },
     }
 
@@ -361,6 +556,85 @@ def ui_artifact_file(kind: str, task_id: str, filename: str):
         media_type=media_type,
         filename=safe_name,
     )
+
+
+@app.get("/ui/review-state/{review_id}")
+def ui_review_state(review_id: str) -> dict:
+    """
+    Return analytics review state: loaded sources and generated review artifacts.
+    """
+    safe_review_id = sanitize_task_id(review_id)
+    sources_dir = review_source_dir(safe_review_id)
+    reports_dir = analytics_review_dir(safe_review_id)
+
+    sources = [serialize_file(path) for path in list_regular_files(sources_dir)]
+    report_paths = [path for path in list_regular_files(reports_dir) if path.suffix.lower() == ".md"]
+    reports = [serialize_file(path) for path in report_paths]
+    latest_preview = preview_text(report_paths[0]) if report_paths else ""
+    latest_meta = None
+    meta_files = [path for path in list_regular_files(reports_dir) if path.suffix.lower() == ".json"]
+    if meta_files:
+        latest_meta = read_json(meta_files[0])
+
+    return {
+        "status": "ok",
+        "review_id": safe_review_id,
+        "sources": sources,
+        "artifacts": reports,
+        "latest_preview": latest_preview,
+        "latest_meta": latest_meta,
+    }
+
+
+@app.post("/ui/review-import-confluence")
+def ui_review_import_confluence(request: ReviewImportRequest) -> dict:
+    """
+    Import article source from Confluence into analytics review source storage.
+    """
+    try:
+        result = import_review_confluence(
+            review_id=request.review_id,
+            urls=request.urls,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта статьи из Confluence: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **result,
+    }
+
+
+@app.post("/ui/review-upload/{review_id}")
+async def ui_review_upload(review_id: str, files: list[UploadFile] = File(...)) -> dict:
+    """
+    Upload article source files for analytics review.
+    """
+    safe_review_id = sanitize_task_id(review_id)
+    target_dir = review_source_dir(safe_review_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files: list[str] = []
+    for uploaded in files:
+        original_name = Path(uploaded.filename or "").name
+        if not original_name:
+            raise HTTPException(status_code=400, detail="Файл без имени не поддерживается")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Неподдерживаемый формат файла: {suffix}")
+
+        target_path = target_dir / original_name
+        content = await uploaded.read()
+        target_path.write_bytes(content)
+        saved_files.append(original_name)
+
+    return {
+        "status": "ok",
+        "review_id": safe_review_id,
+        "saved_files": saved_files,
+    }
 
 
 @app.get("/ui/ops/status")
@@ -527,6 +801,27 @@ def build_context_pack_endpoint(request: BuildContextPackRequest) -> dict:
     }
 
 
+@app.post("/prepare-handoff")
+def prepare_handoff_endpoint(request: HandoffRequest) -> dict:
+    """
+    Create Continue handoff and working copy for a task.
+    """
+    try:
+        result = prepare_continue_handoff(
+            task_id=request.task_id,
+            notes=request.notes,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Не удалось подготовить handoff: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "handoff": result,
+    }
+
+
 @app.post("/run-pipeline")
 def run_pipeline_endpoint(request: RunPipelineRequest) -> dict:
     """
@@ -614,6 +909,46 @@ def draft_endpoint(request: DraftRequest) -> dict:
     }
 
 
+@app.get("/ui/generation-targets")
+def generation_targets_endpoint() -> dict:
+    """
+    Return available document generation targets and presets.
+    """
+    try:
+        catalog = list_generation_targets()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать каталог документов: {exc}") from exc
+
+    return {
+        "status": "ok",
+        **catalog,
+    }
+
+
+@app.post("/ui/generate-documents")
+def generate_documents_endpoint(request: GenerateDocumentsRequest) -> dict:
+    """
+    Generate selected document targets as a package of markdown artifacts.
+    """
+    try:
+        result = generate_document_package(
+            task_id=request.task_id,
+            targets=request.targets,
+            model=request.model,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации комплекта документов: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "package": result,
+    }
+
+
 @app.post("/gap-analysis")
 def gap_analysis_endpoint(request: GapAnalysisRequest) -> dict:
     """
@@ -633,6 +968,28 @@ def gap_analysis_endpoint(request: GapAnalysisRequest) -> dict:
     return {
         "status": "ok",
         "gap_analysis": result,
+    }
+
+
+@app.post("/review-analytics")
+def review_analytics_endpoint(request: AnalyticsReviewRequest) -> dict:
+    """
+    Review finished analytics article against FT/NFT template and consistency expectations.
+    """
+    try:
+        result = run_analytics_review(
+            review_id=request.review_id,
+            document_type=request.document_type,
+            model=request.model,
+        )
+    except WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Ошибка ревью аналитики: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "analytics_review": result,
     }
 
 

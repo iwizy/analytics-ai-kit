@@ -1,0 +1,28 @@
+{
+  "name": "analytics-ai-kit-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "max dev",
+    "build": "max build",
+    "start": "max dev"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.1.0",
+    "@ant-design/pro-components": "3.1.2-0",
+    "@umijs/max": "^4.6.25",
+    "antd": "^6.2.2",
+    "dayjs": "^1.11.19",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

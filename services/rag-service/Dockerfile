@@ -1,7 +1,8 @@
-FROM python:3.12-slim
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 

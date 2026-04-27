@@ -7,3 +7,5 @@ python-docx==1.1.2
 pymupdf==1.24.10
 markdown==3.7
 python-multipart==0.0.20
+playwright==1.47.0
+PyYAML==6.0.2

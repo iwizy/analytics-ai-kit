@@ -33,15 +33,16 @@ services:
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-analytics_context}
       OLLAMA_BASE_URL: http://ollama:11434
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      DRAFT_MODEL: ${DRAFT_MODEL:-qwen3-coder:14b}
+      DRAFT_MODEL: ${DRAFT_MODEL:-qwen3-coder:30b}
       REVIEW_MODEL: ${REVIEW_MODEL:-qwen2.5:7b}
-      REFINE_MODEL: ${REFINE_MODEL:-qwen3-coder:14b}
-      PIPELINE_DRAFT_MODEL: ${PIPELINE_DRAFT_MODEL:-qwen3-coder:14b}
+      REFINE_MODEL: ${REFINE_MODEL:-qwen3-coder:30b}
+      PIPELINE_DRAFT_MODEL: ${PIPELINE_DRAFT_MODEL:-qwen3-coder:30b}
       PIPELINE_GAP_MODEL: ${PIPELINE_GAP_MODEL:-qwen2.5:7b}
-      PIPELINE_REFINE_MODEL: ${PIPELINE_REFINE_MODEL:-qwen3-coder:14b}
+      PIPELINE_REFINE_MODEL: ${PIPELINE_REFINE_MODEL:-qwen3-coder:30b}
       DOCS_ROOT: /data/docs
       TASKS_ROOT: /data/tasks
       ARTIFACTS_ROOT: /data/artifacts
+      SERVICE_STORAGE_ROOT: /data/storage
       CHUNK_SIZE: ${CHUNK_SIZE:-1200}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
       SEARCH_LIMIT: ${SEARCH_LIMIT:-8}
@@ -50,8 +51,31 @@ services:
       PIPELINE_STAGE_TIMEOUT_SEC: ${PIPELINE_STAGE_TIMEOUT_SEC:-240}
       PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-1}
       DOCKER_SOCKET_PATH: /var/run/docker.sock
+      HOST_OS_NAME: ${HOST_OS_NAME:-unknown}
+      CONTINUE_CONFIG_HOST_PATH_LABEL: ${CONTINUE_CONFIG_HOST_PATH_LABEL:-}
+      CONTINUE_CONFIG_ROOT: /host-continue
+      EXCHANGE_ROOT: /data/team-exchange
+      EXCHANGE_HOST_PATH_LABEL: ${TEAM_EXCHANGE_HOST_PATH_LABEL:-./storage/team-exchange}
     volumes:
       - ./docs:/data/docs
       - ./tasks:/data/tasks
       - ./artifacts:/data/artifacts
+      - ./storage/rag-service:/data/storage
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${CONTINUE_CONFIG_HOST_DIR:-./storage/continue-empty}:/host-continue
+      - ${TEAM_EXCHANGE_HOST_DIR:-./storage/team-exchange}:/data/team-exchange
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: analytics-frontend
+    restart: unless-stopped
+    depends_on:
+      - rag-service
+    ports:
+      - "${FRONTEND_PORT:-3001}:8000"
+    environment:
+      UMI_APP_API_BASE_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules

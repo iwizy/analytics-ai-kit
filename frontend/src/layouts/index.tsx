@@ -1,0 +1,160 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, Outlet, useLocation } from '@umijs/max';
+import {
+  CheckCircleOutlined,
+  ClusterOutlined,
+  DatabaseOutlined,
+  FileTextOutlined,
+  ProfileOutlined,
+  SettingOutlined,
+  StopOutlined,
+  SwapOutlined,
+} from '@ant-design/icons';
+import { Alert, Badge, Layout, Menu, Space, Tag, Typography } from 'antd';
+import type { MenuProps } from 'antd';
+
+import { apiRequest } from '@/utils/api';
+import type { EnvironmentSnapshot } from '@/utils/environment';
+
+const { Content, Sider } = Layout;
+
+export default function AppLayout() {
+  const location = useLocation();
+  const [environment, setEnvironment] = useState<EnvironmentSnapshot | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const snapshot = await apiRequest<EnvironmentSnapshot>('/ui/environment-settings');
+        if (active) {
+          setEnvironment(snapshot);
+        }
+      } catch {
+        if (active) {
+          setEnvironment(null);
+        }
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 8000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [location.pathname]);
+
+  const taskLocked = environment ? !environment.readiness.article_ready : false;
+  const contextWarning = environment ? !environment.readiness.all_ready : false;
+  const exchangeWarning = environment ? environment.exchange.new_bundles_count > 0 || environment.exchange.status !== 'ready' : false;
+  const missingReadinessItems = environment?.readiness.missing_items || [];
+  const wrappedMenuLabelStyle: React.CSSProperties = { whiteSpace: 'normal', lineHeight: 1.35 };
+
+  const items = useMemo<MenuProps['items']>(() => [
+    {
+      key: '/environment',
+      icon: <SettingOutlined />,
+      label: <Link to="/environment"><span style={wrappedMenuLabelStyle}>Подготовка окружения</span></Link>,
+    },
+    {
+      key: '/task',
+      icon: <FileTextOutlined />,
+      disabled: taskLocked,
+      label: taskLocked ? <span style={wrappedMenuLabelStyle}>Подготовка статьи</span> : <Link to="/task"><span style={wrappedMenuLabelStyle}>Подготовка статьи</span></Link>,
+    },
+    {
+      key: '/models-docs',
+      icon: <DatabaseOutlined />,
+      label: (
+        <Link to="/models-docs">
+          <Space size={8}>
+            <span style={wrappedMenuLabelStyle}>Модели и контекст</span>
+            <Badge color={contextWarning ? '#ff4d4f' : '#52c41a'} />
+          </Space>
+        </Link>
+      ),
+    },
+    {
+      key: '/context-collection',
+      icon: <ClusterOutlined />,
+      label: <Link to="/context-collection"><span style={wrappedMenuLabelStyle}>Сбор контекста</span></Link>,
+    },
+    {
+      key: '/review',
+      icon: <ProfileOutlined />,
+      label: <Link to="/review"><span style={wrappedMenuLabelStyle}>Ревью аналитики</span></Link>,
+    },
+    {
+      key: '/exchange',
+      icon: <SwapOutlined />,
+      label: (
+        <Link to="/exchange">
+          <Space size={8}>
+            <span style={wrappedMenuLabelStyle}>Обмен контекстом</span>
+            <Badge count={environment?.exchange.new_bundles_count || 0} size="small" style={{ backgroundColor: exchangeWarning ? '#ff4d4f' : '#52c41a' }} />
+          </Space>
+        </Link>
+      ),
+    },
+  ], [contextWarning, exchangeWarning, environment?.exchange.new_bundles_count, taskLocked]);
+
+  const selectedKey = location.pathname.startsWith('/models-docs')
+    ? '/models-docs'
+    : location.pathname.startsWith('/context-collection')
+      ? '/context-collection'
+    : location.pathname.startsWith('/review')
+      ? '/review'
+    : location.pathname.startsWith('/exchange')
+      ? '/exchange'
+    : location.pathname.startsWith('/task')
+      ? '/task'
+      : '/environment';
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Sider width={320} theme="light" style={{ borderRight: '1px solid #f0f0f0', paddingTop: 20 }}>
+        <div style={{ padding: '0 20px 20px' }}>
+          <Typography.Title level={4} style={{ marginBottom: 8 }}>
+            Analytics AI Kit
+          </Typography.Title>
+        </div>
+        <Menu mode="inline" selectedKeys={[selectedKey]} items={items} style={{ borderInlineEnd: 'none' }} />
+        <div style={{ padding: 20 }}>
+          {environment ? (
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Tag color={environment.readiness.all_ready ? 'success' : 'error'} icon={environment.readiness.all_ready ? <CheckCircleOutlined /> : <StopOutlined />}>
+                {environment.readiness.all_ready ? 'Окружение готово' : 'Есть незавершенная подготовка'}
+              </Tag>
+              {taskLocked ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Подготовка статьи пока недоступна"
+                  description={(
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      <Typography.Text type="secondary">
+                        Нужно закончить:
+                      </Typography.Text>
+                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                        {missingReadinessItems.length ? missingReadinessItems.map((item) => (
+                          <li key={item}>{item}</li>
+                        )) : (
+                          <li>Обнови статус окружения на странице подготовки.</li>
+                        )}
+                      </ul>
+                    </Space>
+                  )}
+                />
+              ) : null}
+            </Space>
+          ) : null}
+        </div>
+      </Sider>
+      <Layout>
+        <Content style={{ padding: 24, background: '#f5f7fa' }}>
+          <Outlet />
+        </Content>
+      </Layout>
+    </Layout>
+  );
+}
