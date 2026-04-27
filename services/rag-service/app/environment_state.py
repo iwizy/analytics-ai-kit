@@ -113,8 +113,8 @@ def load_environment_settings() -> dict[str, Any]:
         profile = load_analyst_profile(DEFAULT_ANALYST_ID)
     except ConfluenceImportError:
         profile = None
-    payload["confluence_login"] = str(profile.get("login") or "") if profile else saved_login
-    payload["has_confluence_password"] = bool(profile and profile.get("password"))
+    payload["confluence_login"] = str(profile.login or "") if profile else saved_login
+    payload["has_confluence_password"] = bool(profile and profile.password)
     return payload
 
 
