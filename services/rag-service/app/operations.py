@@ -432,7 +432,21 @@ def _run_pull_stream(model: str) -> None:
             f"{OLLAMA_BASE_URL}/api/pull",
             json={"name": model, "stream": True},
         ) as response:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    detail = response.read().decode("utf-8", errors="replace").strip()
+                except Exception:
+                    detail = str(exc)
+                if "requires a newer version of Ollama" in detail:
+                    raise RuntimeError(
+                        "Ollama устарел и не может скачать эту модель. "
+                        "Запусти ./start.command ещё раз: он обновит docker-образ ollama/ollama "
+                        "и перезапустит контейнер analytics-ollama. Если используешь Ollama вне Docker, "
+                        "обнови его с https://ollama.com/download."
+                    ) from exc
+                raise RuntimeError(detail or str(exc)) from exc
 
             for line in response.iter_lines():
                 if not line:
@@ -444,7 +458,15 @@ def _run_pull_stream(model: str) -> None:
                     continue
 
                 if "error" in event:
-                    raise RuntimeError(str(event["error"]))
+                    error = str(event["error"])
+                    if "requires a newer version of Ollama" in error:
+                        raise RuntimeError(
+                            "Ollama устарел и не может скачать эту модель. "
+                            "Запусти ./start.command ещё раз: он обновит docker-образ ollama/ollama "
+                            "и перезапустит контейнер analytics-ollama. Если используешь Ollama вне Docker, "
+                            "обнови его с https://ollama.com/download."
+                        )
+                    raise RuntimeError(error)
 
                 status = str(event.get("status") or "pulling")
                 completed = event.get("completed")

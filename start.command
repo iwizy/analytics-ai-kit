@@ -69,6 +69,11 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Проверяю свежий образ Ollama, чтобы новые модели скачивались без ошибки manifest/version..."
+if ! docker compose "${compose_files[@]}" pull ollama; then
+  echo "Не удалось обновить образ Ollama. Продолжаю запуск с локальным образом; если скачивание модели снова упадёт с 412, обновите Ollama при доступной сети."
+fi
+
 echo "Поднимаю стек проекта..."
 docker compose "${compose_files[@]}" up -d --build --remove-orphans
 
