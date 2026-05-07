@@ -67,6 +67,7 @@ export default function ContextCollectionPage() {
   const [environment, setEnvironment] = useState<EnvironmentSnapshot | null>(null);
   const [collections, setCollections] = useState<ContextCollection[]>([]);
   const [latest, setLatest] = useState<CollectResult | null>(null);
+  const [collectionError, setCollectionError] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function refreshAll() {
@@ -88,6 +89,7 @@ export default function ContextCollectionPage() {
 
   async function collect(values: CollectForm) {
     setBusy(true);
+    setCollectionError('');
     try {
       const payload = await apiRequest<CollectResult>('/ui/context-collections/collect', {
         method: 'POST',
@@ -95,9 +97,18 @@ export default function ContextCollectionPage() {
       });
       setLatest(payload);
       setCollections(payload.collections);
-      message.success(`Контекст собран: ${payload.manifest.imported_count} страниц`);
+      if (payload.manifest.imported_count === 0) {
+        setCollectionError('Система не смогла собрать ни одной страницы. Проверь ссылку, доступы Confluence и доступность страницы из сети Docker.');
+        message.error('Контекст не собран: 0 доступных страниц');
+      } else if (payload.manifest.failed.length) {
+        message.warning(`Контекст собран частично: ${payload.manifest.imported_count} страниц, ошибок: ${payload.manifest.failed.length}`);
+      } else {
+        message.success(`Контекст собран: ${payload.manifest.imported_count} страниц`);
+      }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Не удалось собрать контекст');
+      const errorMessage = error instanceof Error ? error.message : 'Не удалось собрать контекст';
+      setCollectionError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setBusy(false);
     }
@@ -128,6 +139,17 @@ export default function ContextCollectionPage() {
             ? 'Сбор будет идти от сохранённого локального профиля. Результат попадёт в общий контекст.'
             : 'Перед сбором укажи Base URL, логин и пароль в разделе подготовки окружения.'}
         />
+
+        {collectionError ? (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            message="Контекст не собран"
+            description={collectionError}
+            onClose={() => setCollectionError('')}
+          />
+        ) : null}
 
         <ProCard gutter={16} wrap>
           <ProCard colSpan={{ xs: 24, xl: 10 }} title="Новый сбор" bordered>
@@ -187,11 +209,33 @@ export default function ContextCollectionPage() {
           <ProCard title="Последний сбор" bordered>
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Alert
-                type={latest.manifest.failed.length ? 'warning' : 'success'}
+                type={latest.manifest.imported_count === 0 ? 'error' : latest.manifest.failed.length ? 'warning' : 'success'}
                 showIcon
-                message={`Собрано страниц: ${latest.manifest.imported_count}`}
-                description={`Коллекция: ${latest.collection_id}. Индекс: ${latest.index_path}`}
+                message={latest.manifest.imported_count === 0
+                  ? 'Не удалось собрать ни одной страницы'
+                  : `Собрано страниц: ${latest.manifest.imported_count}`}
+                description={latest.manifest.imported_count === 0
+                  ? 'Проверь, что страница доступна под сохранённым логином, не требует дополнительной авторизации и открывается из сети Docker.'
+                  : `Коллекция: ${latest.collection_id}. Индекс: ${latest.index_path}`}
               />
+              {latest.manifest.failed.length ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Некоторые страницы не удалось собрать"
+                  description={(
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      {latest.manifest.failed.map((item) => (
+                        <Typography.Text key={item.url} type="secondary">
+                          <Typography.Text code>{item.url}</Typography.Text>
+                          {' '}
+                          - {item.error}
+                        </Typography.Text>
+                      ))}
+                    </Space>
+                  )}
+                />
+              ) : null}
               <Table
                 rowKey="file_name"
                 pagination={false}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -272,6 +273,14 @@ def collect_confluence_context(
         finally:
             context.close()
             browser.close()
+
+    if not imported:
+        shutil.rmtree(collection_dir, ignore_errors=True)
+        last_error = failed[-1]["error"] if failed else "страница не вернула содержимое"
+        raise ContextCollectionError(
+            "Не удалось собрать контекст: корневая страница недоступна, требует другой авторизации "
+            f"или не содержит читаемого текста. Последняя ошибка: {last_error}"
+        )
 
     title = imported[0]["title"] if imported else safe_collection_id
     manifest = {
